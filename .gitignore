@@ -6,3 +6,6 @@ venv/
 # Ignore environment variable files
 .env
 .env.*
+
+# ignore temp script
+.test.py

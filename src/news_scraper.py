@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 import requests
 from bs4 import BeautifulSoup
 import feedparser
-from config import RAW_ARTICLES_PATH, NEWS_SOURCES, SCRAPING_CONFIG
+from .config import RAW_ARTICLES_PATH, NEWS_SOURCES, SCRAPING_CONFIG
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
