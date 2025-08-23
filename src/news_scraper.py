@@ -6,12 +6,11 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 import requests
-import feedparser
 from bs4 import BeautifulSoup
-from config import RAW_ARTICLES_PATH
-
+import feedparser
+from config import RAW_ARTICLES_PATH, NEWS_SOURCES, SCRAPING_CONFIG
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -46,247 +45,175 @@ class NewsArticle:
 
 
 class NewsScraper:
-    """Fetches articles using RSS feeds and web scraping as fallback"""
-
-    # Updated RSS feeds - some sources may not have working RSS
-    RSS_FEEDS = {
-        "daily_star": [
-            "https://www.thedailystar.net/frontpage/rss.xml",
-            "https://www.thedailystar.net/news/rss.xml",
-            "https://www.thedailystar.net/business/rss.xml"
-        ],
-        "prothom_alo": [
-            "https://en.prothomalo.com/feed/",
-            "https://www.prothomalo.com/feed/"
-        ],
-        "bdnews24": [
-            "https://bdnews24.com/rss.xml",
-            "https://bdnews24.com/feed"
-        ]
-    }
-
-    # Fallback: Direct article URLs for scraping
-    FALLBACK_URLS = {
-        "daily_star": "https://www.thedailystar.net",
-        "prothom_alo": "https://en.prothomalo.com",
-        "bdnews24": "https://bdnews24.com",
-        "dhaka_tribune": "https://www.dhakatribune.com",
-        "new_age": "https://www.newagebd.net"
-    }
+    """Fetches articles using RSS feeds and web scraping"""
 
     def __init__(self):
         self.articles: List[NewsArticle] = []
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': SCRAPING_CONFIG.get("user_agent")
         })
 
-    def fetch_rss_feed(self, source: str, url: str) -> List[NewsArticle]:
+    def fetch_rss_feed(self, source: str, section: Optional[str], rss_url: str) -> List[NewsArticle]:
         """Fetch and parse a single RSS feed"""
         try:
-            logger.info(f"Fetching RSS feed from {source}: {url}")
-            
-            # Try with requests first for better control
-            response = self.session.get(url, timeout=10)
+            logger.info(f"Fetching RSS feed from {source}:{section} - {rss_url}")
+            response = self.session.get(rss_url, timeout=SCRAPING_CONFIG.get("request_timeout", 10))
             response.raise_for_status()
-            
             feed = feedparser.parse(response.content)
-            
-            if not feed.entries:
-                logger.warning(f"No entries found in RSS feed for {source}")
-                return []
-                
+
             articles = []
-            for entry in feed.entries[:20]:  # Limit to 20 articles per feed
+            for entry in feed.entries[:20]:
                 try:
-                    # Get more detailed content if available
-                    content = entry.get("summary", "")
-                    if hasattr(entry, 'content') and entry.content:
+                    # Prefer full content if available
+                    if hasattr(entry, "content") and entry.content:
                         content = entry.content[0].value if isinstance(entry.content, list) else entry.content.value
-                    
+                    else:
+                        content = entry.get("summary", "")
+
                     article = NewsArticle(
                         title=entry.get("title", "").strip(),
                         content=content.strip(),
                         url=entry.get("link", "").strip(),
                         source=source,
                         published_date=entry.get("published", None),
-                        author=entry.get("author", None)
+                        author=entry.get("author", None),
+                        category=section
                     )
-                    
-                    if article.title and article.content:  # Only add if has title and content
-                        articles.append(article)
-                        
-                except Exception as e:
-                    logger.warning(f"Error processing RSS entry from {source}: {e}")
-                    continue
-                    
-            logger.info(f"Successfully fetched {len(articles)} articles from {source} RSS")
-            return articles
-            
-        except Exception as e:
-            logger.error(f"Error fetching RSS feed for {source} ({url}): {e}")
-            return []
 
-    def scrape_website_fallback(self, source: str, base_url: str) -> List[NewsArticle]:
-        """Fallback method to scrape articles directly from website"""
-        try:
-            logger.info(f"Using fallback scraping for {source}: {base_url}")
-            
-            response = self.session.get(base_url, timeout=10)
-            response.raise_for_status()
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
-            articles = []
-            
-            # Common selectors for news articles
-            article_selectors = [
-                'article h2 a', 'article h3 a', 'article .title a',
-                '.news-item a', '.post-title a', 'h2.title a',
-                '.entry-title a', '.headline a', '.story-headline a'
-            ]
-            
-            links_found = set()
-            
-            for selector in article_selectors:
-                elements = soup.select(selector)
-                for element in elements[:10]:  # Limit per selector
-                    try:
-                        title = element.get_text().strip()
-                        link = element.get('href', '')
-                        
-                        if not title or not link:
-                            continue
-                            
-                        # Convert relative URLs to absolute
-                        if link.startswith('/'):
-                            link = base_url.rstrip('/') + link
-                        elif not link.startswith('http'):
-                            continue
-                            
-                        if link in links_found:
-                            continue
-                            
-                        links_found.add(link)
-                        
-                        # Try to get article content (basic extraction)
-                        content = self.extract_article_content(link)
-                        
-                        if content and len(content.strip()) > 100:  # Minimum content length
-                            article = NewsArticle(
-                                title=title,
-                                content=content,
-                                url=link,
-                                source=source
-                            )
-                            articles.append(article)
-                            
-                            if len(articles) >= 15:  # Limit total articles
-                                break
-                                
-                    except Exception as e:
-                        logger.warning(f"Error processing link from {source}: {e}")
-                        continue
-                        
-                if len(articles) >= 15:
-                    break
-                    
-            logger.info(f"Scraped {len(articles)} articles from {source} website")
+                    if article.title and article.content:
+                        articles.append(article)
+
+                except Exception as e:
+                    logger.warning(f"Error processing RSS entry: {e}")
+                    continue
+
             return articles
-            
+
         except Exception as e:
-            logger.error(f"Error in fallback scraping for {source}: {e}")
+            logger.error(f"Error fetching RSS feed: {e}")
             return []
 
     def extract_article_content(self, url: str) -> str:
-        """Extract article content from URL"""
+        """Extract full article content from webpage"""
         try:
-            response = self.session.get(url, timeout=8)
+            response = self.session.get(url, timeout=SCRAPING_CONFIG.get("request_timeout", 10))
             response.raise_for_status()
-            
             soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Remove unwanted elements
+
+            # Remove unwanted tags
             for element in soup.find_all(['script', 'style', 'nav', 'footer', 'header', 'aside']):
                 element.decompose()
-            
-            # Common content selectors
-            content_selectors = [
-                '.article-content', '.post-content', '.entry-content',
-                '.news-content', '.story-content', 'article .content',
-                '.article-body', '.post-body', 'main article'
-            ]
-            
-            content = ""
-            for selector in content_selectors:
-                element = soup.select_one(selector)
-                if element:
-                    content = element.get_text().strip()
-                    if len(content) > 200:  # Good content found
-                        break
-            
-            # Fallback: try to find content in paragraphs
-            if not content or len(content) < 200:
-                paragraphs = soup.find_all('p')
-                content = ' '.join([p.get_text().strip() for p in paragraphs[:10]])
-            
-            # Clean up content
-            content = ' '.join(content.split())  # Remove extra whitespace
-            return content[:2000]  # Limit content length
-            
+
+            # Extract all <p> tags
+            paragraphs = [p.get_text().strip() for p in soup.find_all('p') if p.get_text().strip()]
+            content = " ".join(paragraphs)
+
+            return content[:5000]  # prevent overly long articles
+
         except Exception as e:
             logger.warning(f"Error extracting content from {url}: {e}")
             return ""
 
     def scrape_all_sources(self) -> List[NewsArticle]:
-        """Fetch articles from all defined RSS feeds and fallback sources"""
+        """Scrape all sources defined in config"""
         all_articles = []
-        
-        # First try RSS feeds
-        for source, urls in self.RSS_FEEDS.items():
+        max_articles = SCRAPING_CONFIG.get("max_articles_per_source", 50)
+
+        for source, info in NEWS_SOURCES.items():
+            base_url = info.get("base_url")
+            sections = info.get("sections", [])
+            rss_feeds = info.get("rss", [])
             source_articles = []
-            
-            for url in urls:
-                articles = self.fetch_rss_feed(source, url)
-                source_articles.extend(articles)
-                
-                if len(source_articles) >= 20:  # Stop if we have enough articles
-                    break
-                    
-                time.sleep(1)  # Rate limiting
-            
-            # If RSS failed or insufficient articles, try fallback
-            if len(source_articles) < 5 and source in self.FALLBACK_URLS:
-                logger.info(f"RSS insufficient for {source}, trying fallback scraping...")
-                fallback_articles = self.scrape_website_fallback(source, self.FALLBACK_URLS[source])
-                source_articles.extend(fallback_articles)
-            
+
+            # If rss feeds are defined explicitly
+            if rss_feeds:
+                for rss_url in rss_feeds:
+                    articles = self.fetch_rss_feed(source, None, rss_url)
+                    for art in articles:
+                        art.category = self.infer_category_from_url(art.url, sections)
+                    source_articles.extend(articles)
+                    if len(source_articles) >= max_articles:
+                        break
+                    time.sleep(SCRAPING_CONFIG.get("delay_between_requests", 1))
+            else:
+                # Try section-based RSS
+                for section in sections:
+                    rss_url = f"{base_url.rstrip('/')}/{section}/rss.xml"
+                    articles = self.fetch_rss_feed(source, section, rss_url)
+                    for art in articles:
+                        art.category = section
+                    source_articles.extend(articles)
+                    if len(source_articles) >= max_articles:
+                        break
+                    time.sleep(SCRAPING_CONFIG.get("delay_between_requests", 1))
+
+            # Fallback: homepage scrape
+            if not source_articles:
+                homepage_articles = self.scrape_homepage(source, base_url, sections)
+                source_articles.extend(homepage_articles)
+
             all_articles.extend(source_articles)
-            logger.info(f"Total articles from {source}: {len(source_articles)}")
-            time.sleep(2)  # Rate limiting between sources
-        
-        # Try additional sources if we don't have enough articles
-        if len(all_articles) < 30:
-            additional_sources = ["dhaka_tribune", "new_age"]
-            for source in additional_sources:
-                if source in self.FALLBACK_URLS:
-                    articles = self.scrape_website_fallback(source, self.FALLBACK_URLS[source])
-                    all_articles.extend(articles)
-                    time.sleep(2)
-        
-        # Remove duplicates based on URL
-        seen_urls = set()
+
+        # Deduplicate by URL
+        seen = set()
         unique_articles = []
-        for article in all_articles:
-            if article.url not in seen_urls and article.url:
-                seen_urls.add(article.url)
-                unique_articles.append(article)
-        
-        logger.info(f"Total unique articles scraped: {len(unique_articles)}")
+        for art in all_articles:
+            if art.url not in seen and art.url:
+                seen.add(art.url)
+                if len(art.content) < 200:
+                    art.content = self.extract_article_content(art.url)
+                unique_articles.append(art)
+
         self.articles = unique_articles
         return unique_articles
 
+    def scrape_homepage(self, source: str, base_url: str, sections: List[str]) -> List[NewsArticle]:
+        """Basic homepage scraping if RSS unavailable"""
+        try:
+            response = self.session.get(base_url, timeout=SCRAPING_CONFIG.get("request_timeout", 10))
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, "html.parser")
+
+            articles = []
+            for a in soup.select("a")[:50]:
+                title = a.get_text().strip()
+                link = a.get("href", "")
+                if not title or not link:
+                    continue
+                if link.startswith("/"):
+                    link = base_url.rstrip("/") + link
+                if not self.is_valid_article_link(link):
+                    continue
+
+                content = self.extract_article_content(link)
+                if len(content) > 200:
+                    category = self.infer_category_from_url(link, sections)
+                    articles.append(NewsArticle(
+                        title=title, content=content, url=link,
+                        source=source, category=category
+                    ))
+            return articles
+        except Exception as e:
+            logger.warning(f"Error scraping homepage for {source}: {e}")
+            return []
+
+    def is_valid_article_link(self, url: str) -> bool:
+        """Filter out invalid or unwanted links"""
+        blacklist = ["auth", "login", "signup", "account", "privacy", "terms", "#"]
+        if any(b in url for b in blacklist):
+            return False
+        return True
+
+    def infer_category_from_url(self, url: str, sections: List[str]) -> Optional[str]:
+        """Infer category from URL path by matching config sections"""
+        parts = url.split("/")
+        for section in sections:
+            if section in parts:
+                return section
+        return None
+
     def save_articles(self, filepath: str = None):
-        """Save scraped articles to JSON file"""
         if not filepath:
             filepath = RAW_ARTICLES_PATH
         path = Path(filepath)
@@ -295,43 +222,21 @@ class NewsScraper:
             json.dump([a.to_dict() for a in self.articles], f, ensure_ascii=False, indent=2)
         logger.info(f"Saved {len(self.articles)} articles to {filepath}")
 
-    def load_articles(self, filepath: str = None) -> List[NewsArticle]:
-        """Load articles from JSON file"""
-        if not filepath:
-            filepath = RAW_ARTICLES_PATH
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                articles_data = json.load(f)
-            self.articles = [NewsArticle(**data) for data in articles_data]
-            logger.info(f"Loaded {len(self.articles)} articles from {filepath}")
-            return self.articles
-        except FileNotFoundError:
-            logger.warning(f"No articles file found at {filepath}")
-            return []
-
 
 def main():
     scraper = NewsScraper()
     articles = scraper.scrape_all_sources()
     scraper.save_articles()
-
     print(f"Scraping completed. Total articles: {len(articles)}")
-    
-    # Show summary by source
-    source_counts = {}
-    for article in articles:
-        source_counts[article.source] = source_counts.get(article.source, 0) + 1
-    
-    print("\nArticles by source:")
-    for source, count in source_counts.items():
-        print(f"  {source}: {count}")
-    
-    # Show sample articles
-    print(f"\nSample articles:")
-    for article in articles[:3]:
-        print(f"\nTitle: {article.title}")
-        print(f"Source: {article.source}")
-        print(f"Content: {article.content[:200]}...")
+
+    # summary by source/category
+    counts = {}
+    for a in articles:
+        key = f"{a.source}:{a.category}"
+        counts[key] = counts.get(key, 0) + 1
+    print("\nArticles by source:category")
+    for k, v in counts.items():
+        print(f"  {k}: {v}")
 
 
 if __name__ == "__main__":
