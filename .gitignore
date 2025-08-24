@@ -1,11 +1,12 @@
 # Ignore Python virtual environment
 venv/
 
-
-
 # Ignore environment variable files
 .env
 .env.*
 
 # ignore temp script
-.test.py
+test.py
+
+# ignore cache
+__pycache__/*
