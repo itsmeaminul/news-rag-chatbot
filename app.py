@@ -1,8 +1,9 @@
-"""
-Streamlit web application for BD News RAG Chatbot - Simplified Chat Interface
+""""
+Streamlit web application for BD News RAG Chatbot
 """
 import json
 import logging
+import re
 from datetime import datetime
 from typing import List
 
@@ -38,6 +39,32 @@ class ChatbotUI:
             layout=UI_CONFIG['layout'],
             initial_sidebar_state="expanded"
         )
+        
+        # Custom CSS for better formatting
+        st.markdown("""
+        <style>
+        .source-section {
+            background-color: #f0f2f6;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        .source-link {
+            color: #0066cc;
+            text-decoration: none;
+            font-size: 0.9em;
+        }
+        .source-link:hover {
+            text-decoration: underline;
+        }
+        .key-points {
+            background-color: #fff3cd;
+            padding: 10px;
+            border-radius: 5px;
+            border-left: 4px solid #ffc107;
+        }
+        </style>
+        """, unsafe_allow_html=True)
 
     def initialize_session_state(self):
         """Initialize session state variables"""
@@ -56,6 +83,10 @@ class ChatbotUI:
         # Add chat session ID for tracking
         if 'chat_session_id' not in st.session_state:
             st.session_state.chat_session_id = datetime.now().isoformat()
+        
+        # Add state for reset confirmation
+        if 'confirming_reset' not in st.session_state:
+            st.session_state.confirming_reset = False
 
     def load_rag_pipeline(self):
         """Load and initialize RAG pipeline"""
@@ -79,29 +110,37 @@ class ChatbotUI:
     def render_sidebar(self):
         """Render sidebar with controls and information"""
         with st.sidebar:
-            st.title("🛠️ Control Panel")
-
-             # New Chat Button
-            if st.button("🆕 New Chat", key="new_chat_btn", use_container_width=True):
+            # New Chat Button
+            if st.button("🆕 Start New Chat", key="new_chat_btn", use_container_width=True):
                 self.start_new_chat()
+
+            # Action Buttons
+            if st.button("🔄 Scrape Recent News", key="sidebar_scrape_btn", use_container_width=True):
+                self.scrape_news()
+            
+            # --- MODIFICATION START ---
+            # The "Reset Database" button now sets a flag to show the confirmation UI.
+            if st.button("🗑️ Reset Database", key="sidebar_reset_btn", use_container_width=True):
+                st.session_state.confirming_reset = True
+            
+            # If the confirmation flag is set, display the confirmation options.
+            if st.session_state.get('confirming_reset', False):
+                st.warning("Are you sure? This will delete all the scrapped news from the database.")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Confirm", key="confirm_reset_action", use_container_width=True, type="primary"):
+                        self.reset_database()
+                        st.session_state.confirming_reset = False
+                        st.rerun()
+                with col2:
+                    if st.button("❌ Cancel", key="cancel_reset_action", use_container_width=True):
+                        st.session_state.confirming_reset = False
+                        st.rerun()
+            # --- MODIFICATION END ---
 
             # Database Statistics
             st.subheader("📈 Database Stats")
             self.display_database_stats()
-
-            st.divider()
-
-            # Action Buttons
-            st.subheader("🎛️ Actions")
-            
-            # col1, col2 = st.columns(2)
-            # with col1:
-            if st.button("📄 Scrape Recent News", key="sidebar_scrape_btn", use_container_width=True):
-                self.scrape_news()
-            
-            # with col2:
-            if st.button("🗑️ Reset DB", key="sidebar_reset_btn", use_container_width=True):
-                self.reset_database()
 
             st.divider()
 
@@ -113,7 +152,8 @@ class ChatbotUI:
                 "Tell me about Bangladesh politics",
                 "Summary of recent sports news",
                 "How many articles about economy?",
-                "Latest news from Prothom Alo"
+                "Latest news from Prothom Alo",
+                "News about Bangladesh cricket team",
             ]
 
             for query in sample_queries:
@@ -193,24 +233,22 @@ class ChatbotUI:
             st.error(f"Error indexing articles: {e}")
             logger.error(f"Indexing error: {e}")
 
+    # This function is now simplified to only perform the reset action.
+    # The confirmation UI is handled in the render_sidebar method.
     def reset_database(self):
-        """Reset vector database"""
+        """Reset vector database after confirmation."""
         try:
             if not self.load_rag_pipeline():
                 return
 
-            if st.button("⚠️ Confirm Reset", key="confirm_reset"):
-                with st.spinner("Resetting database..."):
-                    success = self.db_manager.reset_collection()
+            with st.spinner("Resetting database..."):
+                success = self.db_manager.reset_collection()
 
-                    if success:
-                        st.success("Database reset successfully!")
-                        st.session_state.db_stats = {}
-                    else:
-                        st.error("Failed to reset database")
-            else:
-                st.warning("Click 'Confirm Reset' to proceed with database reset")
-
+                if success:
+                    st.success("Database reset successfully!")
+                    st.session_state.db_stats = {}
+                else:
+                    st.error("Failed to reset database.")
         except Exception as e:
             st.error(f"Error resetting database: {e}")
             logger.error(f"Database reset error: {e}")
@@ -236,6 +274,65 @@ class ChatbotUI:
         else:
             st.info("No database statistics available. Scrape news to see stats.")
 
+    def extract_sources_from_response(self, response: str) -> List[dict]:
+        """Extract source information from response"""
+        sources = []
+        
+        # Look for sources section in response
+        if "**Sources:**" in response:
+            sources_section = response.split("**Sources:**")[1]
+            source_lines = sources_section.split('\n')
+            
+            current_source = {}
+            for line in source_lines:
+                line = line.strip()
+                if line and line[0].isdigit():
+                    # New source entry
+                    if current_source:
+                        sources.append(current_source)
+                    
+                    # Extract title and source name
+                    match = re.search(r'\d+\.\s*\*\*(.*?)\*\*\s*-\s*(.*?)$', line)
+                    if match:
+                        current_source = {
+                            'title': match.group(1).strip(),
+                            'source': match.group(2).strip(),
+                            'url': ''
+                        }
+                elif line.startswith('Link:') and current_source:
+                    current_source['url'] = line.replace('Link:', '').strip()
+            
+            # Add the last source if exists
+            if current_source:
+                sources.append(current_source)
+        
+        return sources
+
+    def format_response_with_sources(self, response: str) -> tuple:
+        """Format response by separating main content from sources"""
+        if "**Sources:**" in response:
+            parts = response.split("**Sources:**")
+            main_response = parts[0].strip()
+            sources = self.extract_sources_from_response(response)
+            return main_response, sources
+        
+        return response, []
+
+    def render_sources_section(self, sources: List[dict]):
+        """Render sources section in Streamlit"""
+        if not sources:
+            return
+        
+        st.markdown("---")
+        st.markdown("### 📰 Sources")
+        
+        for i, source in enumerate(sources, 1):
+            with st.expander(f"{i}. {source['title']} - {source['source']}", expanded=False):
+                if source['url']:
+                    st.markdown(f"[Read full article]({source['url']})")
+                else:
+                    st.write("URL not available")
+
     def render_main_chat(self):
         """Render main chat interface"""
         st.title(f"{UI_CONFIG['page_icon']} {UI_CONFIG['page_title']}")
@@ -254,11 +351,9 @@ class ChatbotUI:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
                 
-                # Add source attribution for assistant messages if available
+                # Display sources if available
                 if message["role"] == "assistant" and "sources" in message:
-                    with st.expander("📰 Sources"):
-                        for source in message["sources"]:
-                            st.write(f"• {source}")
+                    self.render_sources_section(message["sources"])
 
         # Handle sample query from sidebar
         if hasattr(st.session_state, 'sample_query'):
@@ -272,7 +367,7 @@ class ChatbotUI:
             self.process_user_query(prompt)
 
     def process_user_query(self, query: str):
-        """Process user query and display response with source attribution"""
+        """Process user query and display clean formatted response"""
         st.session_state.messages.append({"role": "user", "content": query})
 
         with st.chat_message("user"):
@@ -282,11 +377,19 @@ class ChatbotUI:
             with st.spinner("Thinking..."):
                 try:
                     response = self.rag_pipeline.process_query(query)
-                    st.markdown(response)
                     
-                    # Extract sources from the response or context
-                    sources = self._extract_sources_from_response(response)
-                    message_data = {"role": "assistant", "content": response}
+                    # Separate main response from sources
+                    main_response, sources = self.format_response_with_sources(response)
+                    
+                    # Display main response
+                    st.markdown(main_response)
+                    
+                    # Display sources section
+                    if sources:
+                        self.render_sources_section(sources)
+                    
+                    # Store message with sources for chat history
+                    message_data = {"role": "assistant", "content": main_response}
                     if sources:
                         message_data["sources"] = sources
                     
@@ -297,19 +400,6 @@ class ChatbotUI:
                     st.error(error_msg)
                     st.session_state.messages.append({"role": "assistant", "content": error_msg})
                     logger.error(f"Query processing error: {e}")
-
-    def _extract_sources_from_response(self, response: str) -> List[str]:
-        """Extract mentioned sources from response text"""
-        source_keywords = ["Prothom Alo", "Daily Star", "BDNews24", "source", "according to"]
-        sources = []
-        
-        for line in response.split('\n'):
-            for keyword in source_keywords:
-                if keyword.lower() in line.lower():
-                    sources.append(line.strip())
-                    break
-                    
-        return sources[:3]  # Return top 3 sources mentioned
 
     def run(self):
         """Main application runner"""

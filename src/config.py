@@ -104,7 +104,7 @@ VECTORDB_CONFIG = {
 
 # LLM configuration
 LLM_CONFIG = {
-    "model_name": "llama3.2",  # "qwen2:1.5b",
+    "model_name": "qwen2:1.5b",    # "llama3.2",
     "base_url": "http://localhost:11434",
     "temperature": 0.7,
     "max_tokens": 800,  # Increased for better responses
