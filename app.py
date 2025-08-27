@@ -114,6 +114,19 @@ class ChatbotUI:
             if st.button("🆕 Start New Chat", key="new_chat_btn", use_container_width=True):
                 self.start_new_chat()
 
+            # --- Previous Chat Sessions ---
+            if st.session_state.get('chat_history_sessions'):
+                st.subheader("📜 Previous Chat Sessions")
+                for session in reversed(st.session_state.chat_history_sessions):
+                    # Show first question as button label
+                    label = session.get('label', 'No question')
+                    if st.button(f"{label[:50]}...", key=f"prev_{hash(label)}"):
+                        st.session_state.messages = session['messages']
+                        st.rerun()
+            
+            st.divider()
+
+            st.subheader("🗄️ Database Management")
             # Action Buttons
             if st.button("🔄 Scrape Recent News", key="sidebar_scrape_btn", use_container_width=True):
                 self.scrape_news()
@@ -161,10 +174,26 @@ class ChatbotUI:
                     st.session_state.sample_query = query
 
     def start_new_chat(self):
-        """Start a new chat session"""
+        """Start a new chat session while preserving previous chat history"""
+        if st.session_state.messages:
+            # Use the first user message as the session label
+            first_question = next(
+                (msg["content"] for msg in st.session_state.messages if msg["role"] == "user"), 
+                "No question"
+            )
+
+            if 'chat_history_sessions' not in st.session_state:
+                st.session_state.chat_history_sessions = []
+
+            st.session_state.chat_history_sessions.append({
+                'label': first_question,
+                'messages': st.session_state.messages.copy()
+            })
+
+        # Start a fresh chat
         st.session_state.messages = []
         st.session_state.chat_session_id = datetime.now().isoformat()
-        st.success("Started new chat session!")
+        st.success("Started new chat session! Previous chat history is preserved.")
         st.rerun()
 
     def scrape_news(self):
@@ -245,7 +274,7 @@ class ChatbotUI:
                 success = self.db_manager.reset_collection()
 
                 if success:
-                    st.success("Database reset successfully!")
+                    st.success("✅ Successfully reset database! Database is empty now.")
                     st.session_state.db_stats = {}
                 else:
                     st.error("Failed to reset database.")
