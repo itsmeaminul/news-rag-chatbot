@@ -21,7 +21,6 @@ from src.text_preprocessor import TextProcessor
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 class ChatbotUI:
     """Streamlit UI for the news chatbot"""
 
@@ -111,17 +110,22 @@ class ChatbotUI:
         """Render sidebar with controls and information"""
         with st.sidebar:
             # New Chat Button
-            if st.button("🆕 Start New Chat", key="new_chat_btn", use_container_width=True):
+            if st.button("📝 New Chat", key="new_chat_btn", use_container_width=True, type="primary"):
                 self.start_new_chat()
 
             # --- Previous Chat Sessions ---
             if st.session_state.get('chat_history_sessions'):
-                st.subheader("📜 Previous Chat Sessions")
-                for session in reversed(st.session_state.chat_history_sessions):
-                    # Show first question as button label
+                st.subheader("📜 Chat History")
+                for idx, session in enumerate(reversed(st.session_state.chat_history_sessions)):
                     label = session.get('label', 'No question')
-                    if st.button(f"{label[:50]}...", key=f"prev_{hash(label)}"):
+
+                    # Highlight if active
+                    is_active = st.session_state.get('active_chat_idx') == len(st.session_state.chat_history_sessions) - 1 - idx
+                    button_label = f"👉 {label[:50]}..." if is_active else f"{label[:50]}..."
+
+                    if st.button(button_label, key=f"prev_session_{idx}"):
                         st.session_state.messages = session['messages']
+                        st.session_state.active_chat_idx = len(st.session_state.chat_history_sessions) - 1 - idx
                         st.rerun()
             
             st.divider()
@@ -131,7 +135,6 @@ class ChatbotUI:
             if st.button("🔄 Scrape Recent News", key="sidebar_scrape_btn", use_container_width=True):
                 self.scrape_news()
             
-            # --- MODIFICATION START ---
             # The "Reset Database" button now sets a flag to show the confirmation UI.
             if st.button("🗑️ Reset Database", key="sidebar_reset_btn", use_container_width=True):
                 st.session_state.confirming_reset = True
@@ -149,11 +152,10 @@ class ChatbotUI:
                     if st.button("❌ Cancel", key="cancel_reset_action", use_container_width=True):
                         st.session_state.confirming_reset = False
                         st.rerun()
-            # --- MODIFICATION END ---
 
             # Database Statistics
-            st.subheader("📈 Database Stats")
-            self.display_database_stats()
+            with st.expander("📈 Database Stats", expanded=False):
+                self.display_database_stats()
 
             st.divider()
 
@@ -162,11 +164,9 @@ class ChatbotUI:
             sample_queries = [
                 "What is the trending news today?",
                 "How many news articles are there?",
-                "Tell me about Bangladesh politics",
+                "Tell me about Bangladesh politics news",
                 "Summary of recent sports news",
-                "How many articles about economy?",
                 "Latest news from Prothom Alo",
-                "News about Bangladesh cricket team",
             ]
 
             for query in sample_queries:
@@ -178,21 +178,24 @@ class ChatbotUI:
         if st.session_state.messages:
             # Use the first user message as the session label
             first_question = next(
-                (msg["content"] for msg in st.session_state.messages if msg["role"] == "user"), 
+                (msg["content"] for msg in st.session_state.messages if msg["role"] == "user"),
                 "No question"
             )
 
             if 'chat_history_sessions' not in st.session_state:
                 st.session_state.chat_history_sessions = []
 
-            st.session_state.chat_history_sessions.append({
-                'label': first_question,
-                'messages': st.session_state.messages.copy()
-            })
+            # Prevent duplicates (store unique based on messages or label)
+            if not any(s['messages'] == st.session_state.messages for s in st.session_state.chat_history_sessions):
+                st.session_state.chat_history_sessions.append({
+                    'label': first_question,
+                    'messages': st.session_state.messages.copy()
+                })
 
         # Start a fresh chat
         st.session_state.messages = []
         st.session_state.chat_session_id = datetime.now().isoformat()
+        st.session_state.active_chat_idx = None  # Reset active
         st.success("Started new chat session! Previous chat history is preserved.")
         st.rerun()
 
@@ -293,8 +296,8 @@ class ChatbotUI:
         stats = st.session_state.db_stats
 
         if stats:
-            st.metric("Total Chunks", stats.get('total_chunks', 0))
-            st.metric("Unique Sources", stats.get('unique_sources', 0))
+            st.write(f"**Total Articles:** {st.session_state.articles_scraped}")
+            st.write(f"**Unique Sources:** {stats.get('unique_sources', 0)}")
             sources = stats.get('sources', [])
             if sources:
                 st.write("**Sources:**")
