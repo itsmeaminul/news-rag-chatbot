@@ -3,6 +3,10 @@ Centralized configuration for the BD News RAG Chatbot
 """
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -44,15 +48,21 @@ NEWS_SOURCES = {
             "https://www.thedailystar.net/news/rss.xml",
             "https://www.thedailystar.net/sports/rss.xml",
             "https://www.thedailystar.net/lifestyle/rss.xml"
-        ]
+        ],
+        "article_selectors": {
+            "title": ["h1.title", "h1", ".article-header h1"],
+            "content": [".article-content", ".node-content", ".story-content"],
+            "category": [".breadcrumb li:last-child a", ".category a"],
+            "author": [".author", ".node-meta .name", ".byline"]
+        }
     },
     "bdnews24": {
         "base_url": "https://bdnews24.com",
         "sections": ["news/bangladesh", "news/world", "sport", "news/politics", "news/education", "news/environment", "news/science", "news/business"],
         "rss": [
             "https://bdnews24.com/?widgetName=rssfeed&widgetId=1150&getXmlFeed=true",
-            "https://bdnews24.com/feeds/news.xml",  # Try this if available
-            "https://bdnews24.com/rss.xml"  # Common RSS path
+            # "https://bdnews24.com/feeds/news.xml",  # Try this if available
+            # "https://bdnews24.com/rss.xml"  # Common RSS path
         ],
         # Add specific selectors for bdnews24
         "article_selectors": {
@@ -103,11 +113,19 @@ VECTORDB_CONFIG = {
 }
 
 # LLM configuration
+USE_LOCAL = False   # True = Ollama local, False = Groq API
+
+LLM_PROVIDER = {
+    "groq_api_key": os.getenv("GROQ_API_KEY", ""),
+    "groq_model": "llama3-8b-8192"
+}
+
+
 LLM_CONFIG = {
-    "model_name": "qwen2:1.5b",    # "llama3.2",
+    "model_name": "llama3.2",   # "qwen2:1.5b",
     "base_url": "http://localhost:11434",
     "temperature": 0.7,
-    "max_tokens": 800,  # Increased for better responses
+    "max_tokens": 1000,  # Increased for better responses
     "context_window": 4096
 }
 

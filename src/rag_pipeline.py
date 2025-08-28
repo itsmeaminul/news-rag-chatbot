@@ -8,12 +8,13 @@ from typing import Dict, List, Optional, Set
 
 import requests
 
-from .config import LLM_CONFIG, VECTORDB_CONFIG
+from .config import LLM_CONFIG, USE_LOCAL, LLM_PROVIDER
 from .chroma_manager import ChromaManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 os.environ["CHROMA_TELEMETRY"] = "false"
 
@@ -71,6 +72,44 @@ class OllamaLLM:
         except Exception as e:
             logger.error(f"Error generating response: {e}")
             return "I apologize, but I'm having trouble generating a response right now. Please try again later."
+
+class GroqLLM:
+    """Groq API client"""
+
+    def __init__(self, model_name=None):
+        from .config import LLM_PROVIDER
+        self.api_key = LLM_PROVIDER["groq_api_key"]
+        self.model = model_name or LLM_PROVIDER["groq_model"]
+        self.api_url = "https://api.groq.com/openai/v1/chat/completions"
+
+        if not self.api_key:
+            raise EnvironmentError("❌ GROQ_API_KEY missing in .env")
+
+    def generate(self, prompt: str, system_prompt: str = None) -> str:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 500,
+        }
+
+        try:
+            response = requests.post(self.api_url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            result = response.json()
+            return result["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            return f"Error generating response from Groq API: {e}"
 
 
 class TitleFocusedQueryProcessor:
@@ -289,7 +328,13 @@ class EnhancedRAGPipeline:
 
     def __init__(self):
         self.db_manager = ChromaManager()
-        self.llm = OllamaLLM()
+        if USE_LOCAL:
+            self.llm = OllamaLLM()
+            logger.info("✅ Using local Ollama LLM")
+        else:
+            self.llm = GroqLLM()
+            logger.info("✅ Using Groq API")
+            
         self.query_processor = TitleFocusedQueryProcessor()
 
         self.system_prompt = """You are a helpful AI assistant that answers questions about Bangladeshi news articles with accuracy and clarity.
@@ -744,13 +789,13 @@ class EnhancedRAGPipeline:
             # Check if database has articles
             stats = self.db_manager.get_collection_stats()
             if stats.get('total_chunks', 0) == 0:
-                return "No news articles are currently loaded. Please use the 'Scrape News' button in the sidebar to load some articles first."
+                return "No news articles are currently loaded. Please use the 'Scrape Recent News' button in the sidebar to load some articles first."
 
             # Extract intent and entities from query
             query_data = self.query_processor.extract_intent_and_entities(user_query)
             intent = query_data['intent']
 
-            # Route to appropriate handler
+            # Route to appropriate handlera
             if intent == 'count_articles':
                 return self._handle_count_articles(query_data)
             elif intent == 'count_topic':
@@ -778,13 +823,10 @@ def main():
     """Test the enhanced RAG pipeline with clean output"""
     rag = EnhancedRAGPipeline()
     test_queries = [
-        "Bangladeshi police officer arrested in West Bengal what is the matter?",
         "How many articles do you have?",
-        "News about Bangladesh cricket team",
         "What is trending news today?",
         "Summarize economy news from Daily Star",
         "How many articles about coronavirus vaccine?",
-        "Article about Dhaka traffic problems",
         "Latest news from Prothom Alo"
     ]
 
