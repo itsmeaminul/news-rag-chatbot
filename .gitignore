@@ -11,3 +11,6 @@ test.py
 
 # ignore cache
 __pycache__/
+
+# ignore folder for misc files
+misc_files/
