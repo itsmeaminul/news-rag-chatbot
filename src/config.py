@@ -61,10 +61,7 @@ NEWS_SOURCES = {
         "sections": ["news/bangladesh", "news/world", "sport", "news/politics", "news/education", "news/environment", "news/science", "news/business"],
         "rss": [
             "https://bdnews24.com/?widgetName=rssfeed&widgetId=1150&getXmlFeed=true",
-            # "https://bdnews24.com/feeds/news.xml",  # Try this if available
-            # "https://bdnews24.com/rss.xml"  # Common RSS path
         ],
-        # Add specific selectors for bdnews24
         "article_selectors": {
             "title": ["h1.article-title", "h1.headline", "h1"],
             "content": [".article-body", ".story-content", ".content", "article"],
@@ -76,15 +73,18 @@ NEWS_SOURCES = {
 
 # Scraping configuration
 SCRAPING_CONFIG = {
-    "max_articles_per_source": 50,
+    "max_articles_per_source": 100,
     "request_timeout": 10,
     "delay_between_requests": 1,
-    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "delay_min": 0.2,
+    "delay_max": 1.0,
+    "max_workers": 8
 }
 
 # Enhanced Text processing configuration with title emphasis
 TEXT_PROCESSING_CONFIG = {
-    "chunk_size": 800,
+    "chunk_size": 1000,
     "chunk_overlap": 150,
     "min_text_length": 100,
     "max_text_length": 8000,
@@ -119,7 +119,6 @@ LLM_PROVIDER = {
     "groq_api_key": os.getenv("GROQ_API_KEY", ""),
     "groq_model": "llama3-8b-8192"
 }
-
 
 LLM_CONFIG = {
     "model_name": "llama3.2",   # "qwen2:1.5b",

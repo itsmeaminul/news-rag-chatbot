@@ -74,6 +74,7 @@ news-rag-chatbot/
 │   ├── news_scraper.py        # Multi-threaded web scraping
 │   ├── text_preprocessor.py   # Enhanced text processing
 │   ├── chroma_manager.py      # Vector database operations
+│   ├── prompts.py             # Prompt templates
 │   └── rag_pipeline.py        # RAG logic with title focus
 ├── app.py                     # Main Streamlit application
 ├── data/                      # Data storage directory

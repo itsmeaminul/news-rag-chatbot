@@ -8,7 +8,6 @@ from datetime import datetime
 from typing import List
 
 import streamlit as st
-import pandas as pd
 
 from src.config import UI_CONFIG, RAW_ARTICLES_PATH, PROCESSED_ARTICLES_PATH
 from src.rag_pipeline import RAGPipeline
@@ -121,7 +120,7 @@ class ChatbotUI:
 
                     # Highlight if active
                     is_active = st.session_state.get('active_chat_idx') == len(st.session_state.chat_history_sessions) - 1 - idx
-                    button_label = f"👉 {label[:50]}..." if is_active else f"{label[:50]}..."
+                    button_label = f"👉 {label[:20]}..." if is_active else f"{label[:30]}..."
 
                     if st.button(button_label, key=f"prev_session_{idx}"):
                         st.session_state.messages = session['messages']
@@ -163,8 +162,8 @@ class ChatbotUI:
             st.subheader("💡 Sample Queries")
             sample_queries = [
                 "What is the trending news today?",
-                "How many news articles are there?",
-                "Tell me about Bangladesh politics news",
+                "How many articles are there?",
+                "Tell me about Bangladesh politics",
                 "Summary of recent sports news",
                 "Latest news from Prothom Alo",
             ]

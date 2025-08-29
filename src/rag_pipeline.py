@@ -10,6 +10,7 @@ import requests
 
 from .config import LLM_CONFIG, USE_LOCAL, LLM_PROVIDER
 from .chroma_manager import ChromaManager
+from .prompts import PromptTemplates, ResponseMessages, PromptBuilder
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -71,7 +72,7 @@ class OllamaLLM:
 
         except Exception as e:
             logger.error(f"Error generating response: {e}")
-            return "I apologize, but I'm having trouble generating a response right now. Please try again later."
+            return ResponseMessages.INITIALIZATION_ERROR
 
 class GroqLLM:
     """Groq API client"""
@@ -83,7 +84,7 @@ class GroqLLM:
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
 
         if not self.api_key:
-            raise EnvironmentError("❌ GROQ_API_KEY missing in .env")
+            raise EnvironmentError("GROQ_API_KEY missing in .env")
 
     def generate(self, prompt: str, system_prompt: str = None) -> str:
         headers = {
@@ -330,31 +331,13 @@ class EnhancedRAGPipeline:
         self.db_manager = ChromaManager()
         if USE_LOCAL:
             self.llm = OllamaLLM()
-            logger.info("✅ Using local Ollama LLM")
+            logger.info("Using local Ollama LLM")
         else:
             self.llm = GroqLLM()
-            logger.info("✅ Using Groq API")
+            logger.info("Using Groq API")
             
         self.query_processor = TitleFocusedQueryProcessor()
-
-        self.system_prompt = """You are a helpful AI assistant that answers questions about Bangladeshi news articles with accuracy and clarity.
-
-        Your responses should be:
-        - Accurate and based only on the provided context
-        - Clear, concise, and well-structured
-        - Organized with key points when appropriate
-        - Written in a conversational but informative tone
-        - Focused on the most important and relevant information
-
-        Response Format Guidelines:
-        1. Start with a brief summary or direct answer
-        2. Follow with key points or details when relevant (use bullet points or numbered lists for clarity)
-        3. Include important facts, dates, names, and locations
-        4. DO NOT mention source labels like [TITLE MATCH] or [TITLE SUMMARY] in your response
-        5. Keep the response focused and avoid unnecessary repetition
-
-        If you cannot find relevant information in the provided context, politely say so and suggest alternative ways to help.
-        """
+        self.prompt_builder = PromptBuilder()
 
     def _title_first_search(self, query_data: Dict) -> List[Dict]:
         """Search strategy that tries multiple approaches"""
@@ -522,7 +505,6 @@ class EnhancedRAGPipeline:
 
         return "".join(context_parts)
 
-    # Helper method to format source names
     def _format_source_name(self, source: str) -> str:
         """Format source names for better display"""
         source_mapping = {
@@ -573,21 +555,18 @@ class EnhancedRAGPipeline:
             total_chunks = stats.get('total_chunks', 0)
             
             if total_chunks == 0:
-                return "No articles are currently indexed in the database. Please scrape some news first."
+                return ResponseMessages.NO_ARTICLES_LOADED
             
             unique_sources = stats.get('unique_sources', 0)
             sources = stats.get('sources', [])
-            title_chunks = stats.get('title_chunks', 0)
-            
-            response = f"I have **{total_chunks}** article chunks from **{unique_sources}** news sources in the database."
             
             if sources:
                 formatted_sources = [self._format_source_name(s) for s in sources]
-                response += f"\n\n**Available Sources:**\n"
-                for source in formatted_sources:
-                    response += f"• {source}\n"
-                
-            return response
+                return ResponseMessages.get_count_articles_response(
+                    total_chunks, unique_sources, formatted_sources
+                )
+            else:
+                return ResponseMessages.get_count_articles_response(total_chunks, unique_sources)
             
         except Exception as e:
             logger.error(f"Error handling count articles: {e}")
@@ -602,9 +581,7 @@ class EnhancedRAGPipeline:
             topic = query_data.get('topic', query_data.get('exact_phrase', 'the topic'))
             
             if not relevant_results:
-                return f"I couldn't find any articles about **'{topic}'**. Try rephrasing your query or check if articles are loaded."
-            
-            response = f"I found **{len(relevant_results)}** article chunks related to **'{topic}'**."
+                return ResponseMessages.get_no_title_matches(topic)
             
             # Group by sources for better insight
             sources = {}
@@ -614,12 +591,13 @@ class EnhancedRAGPipeline:
                 sources[formatted_source] = sources.get(formatted_source, 0) + 1
             
             if sources:
-                response += f"\n\n**Articles by Source:**\n"
-                for source, count in sources.items():
-                    response += f"• {source}: {count} articles\n"
+                sources_breakdown = '\n'.join(f"• {source}: {count} articles" for source, count in sources.items())
+                return ResponseMessages.get_count_topic_response(
+                    len(relevant_results), topic, sources_breakdown
+                )
+            else:
+                return ResponseMessages.get_count_topic_response(len(relevant_results), topic)
                 
-            return response
-            
         except Exception as e:
             logger.error(f"Error handling count topic: {e}")
             return f"I encountered an error while counting articles about '{topic}'."
@@ -631,32 +609,25 @@ class EnhancedRAGPipeline:
 
             if not results:
                 topic = query_data.get('topic', query_data.get('exact_phrase', 'that topic'))
-                return f"I couldn't find any articles about '{topic}'. Please try a different topic or check if articles are loaded."
+                return ResponseMessages.get_no_title_matches(topic)
 
             relevant_results = [r for r in results if r.get('similarity', 0) > 0.2]
 
             if not relevant_results:
                 topic = query_data.get('topic', query_data.get('exact_phrase', 'that topic'))
-                return f"I found some articles but they don't seem closely related to '{topic}'. Could you be more specific?"
+                return ResponseMessages.get_no_close_matches(topic)
 
             context = self._format_context_for_llm(relevant_results)
             topic = query_data.get('topic', query_data.get('exact_phrase', query_data['original_query']))
             source_urls = self._extract_source_urls(relevant_results)
             
-            prompt = f"""Based on the following news articles, provide a comprehensive summary about '{topic}': 
+            # Use prompt builder for summary
+            prompt = (self.prompt_builder
+                     .with_topic(topic)
+                     .with_context(context)
+                     .build_summary_prompt())
 
-            {context}
-
-            Please provide a well-structured summary that:
-            1. Starts with a brief overview
-            2. Includes key points or important details (use bullet points when appropriate)
-            3. Mentions specific facts, dates, names, and locations when relevant
-            4. Organizes information clearly and logically
-            5. Focuses on the most important information without repetition
-
-            Format your response in a clear, readable manner with proper structure."""
-
-            llm_response = self.llm.generate(prompt, self.system_prompt)
+            llm_response = self.llm.generate(prompt, PromptTemplates.SYSTEM_PROMPT)
             
             # Add sources section
             sources_section = self._format_sources_section(source_urls)
@@ -686,46 +657,15 @@ class EnhancedRAGPipeline:
                         })
             
             if not results:
-                return "I don't have any news articles to show you. Please scrape some news first using the 'Scrape News' button."
+                return ResponseMessages.NO_TRENDING_NEWS
 
             context = self._format_context_for_llm(results)
             source_urls = self._extract_source_urls(results)
             
-            # prompt = f"""Based on these news articles, provide a summary of recent/trending news from Bangladesh:
+            # Use prompt template for trending
+            prompt = PromptTemplates.get_trending_prompt(context)
 
-            # {context}
-
-            # Please provide a well-organized summary that:
-            # 1. Starts with a brief overview of current events
-            # 2. Lists the most important news stories
-            # 3. Organizes information by topic or significance
-            # 4. Uses clear, structured format with bullet points for key points
-            # 5. Focuses on the most newsworthy and current information
-
-            # Format your response clearly and avoid repetition."""
-
-            prompt = f"""Based on these news articles, provide a summary of recent/trending news from Bangladesh:
-            
-            {context} 
-
-            Please follow these rules:
-            1. If relevant information is found, provide a well-organized summary that:
-            - Starts with a brief overview of current events
-            - Lists the most important news stories
-            - Organizes information by topic or significance
-            - Uses clear, structured format with bullet points for key points
-            - Focuses on the most newsworthy and current information
-
-            2. If no relevant information is found in the provided articles:
-            - Clearly state that no direct updates are available on the requested topic
-            - Avoid generating irrelevant or unrelated content
-            - Suggest reliable sources (e.g., BDNews24, The Daily Star, official websites, or social media) where the user can find up-to-date information
-            - Keep the response concise, polite, and professional
-
-            Format the response clearly and avoid repetition.
-            """
-
-            llm_response = self.llm.generate(prompt, self.system_prompt)
+            llm_response = self.llm.generate(prompt, PromptTemplates.SYSTEM_PROMPT)
             
             # Add sources section
             sources_section = self._format_sources_section(source_urls)
@@ -742,7 +682,7 @@ class EnhancedRAGPipeline:
             results = self._title_first_search(query_data)
             
             if not results:
-                return f"I couldn't find any articles related to '{query_data['original_query']}'. Please try different keywords or check if articles are loaded."
+                return ResponseMessages.get_no_relevant_articles(query_data['original_query'])
             
             # Filter by similarity threshold, but be more lenient for title matches
             relevant_results = []
@@ -759,20 +699,13 @@ class EnhancedRAGPipeline:
             context = self._format_context_for_llm(relevant_results)
             source_urls = self._extract_source_urls(relevant_results)
             
-            prompt = f"""Based on the following news articles, please answer this question: "{query_data['original_query']}"
+            # Use prompt builder for general search
+            prompt = (self.prompt_builder
+                     .with_query(query_data['original_query'])
+                     .with_context(context)
+                     .build_general_prompt())
 
-            {context}
-
-            Please provide a helpful and informative response that:
-            1. Directly answers the user's question with a clear summary
-            2. Includes key points or important details (use bullet points when helpful)
-            3. Mentions specific facts, dates, names, and locations when relevant
-            4. Is accurate and based only on the provided articles
-            5. Is well-structured and easy to understand
-
-            Format your response clearly and focus on the most relevant information."""
-
-            llm_response = self.llm.generate(prompt, self.system_prompt)
+            llm_response = self.llm.generate(prompt, PromptTemplates.SYSTEM_PROMPT)
             
             # Add sources section
             sources_section = self._format_sources_section(source_urls)
@@ -789,13 +722,16 @@ class EnhancedRAGPipeline:
             # Check if database has articles
             stats = self.db_manager.get_collection_stats()
             if stats.get('total_chunks', 0) == 0:
-                return "No news articles are currently loaded. Please use the 'Scrape Recent News' button in the sidebar to load some articles first."
+                return ResponseMessages.NO_ARTICLES_LOADED
 
             # Extract intent and entities from query
             query_data = self.query_processor.extract_intent_and_entities(user_query)
             intent = query_data['intent']
 
-            # Route to appropriate handlera
+            # Reset prompt builder for this query
+            self.prompt_builder.reset()
+
+            # Route to appropriate handler
             if intent == 'count_articles':
                 return self._handle_count_articles(query_data)
             elif intent == 'count_topic':
@@ -809,7 +745,7 @@ class EnhancedRAGPipeline:
 
         except Exception as e:
             logger.error(f"Error processing query '{user_query}': {e}")
-            return "I encountered an error while processing your question. Please try again or rephrase your query."
+            return ResponseMessages.DATABASE_ERROR
 
 
 # Create aliases for backward compatibility
