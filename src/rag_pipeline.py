@@ -408,14 +408,6 @@ class RAGPipeline:
         
         response = f"📈 **Trending News Today**\n\n{trending_summary}\n\n"
         
-        # Add category breakdown
-        response += "**News by Category:**\n"
-        for category, articles in list(categories.items())[:5]:
-            response += f"\n**{category}** ({len(articles)} articles)\n"
-            for article in articles[:2]:
-                title = article['metadata'].get('title', 'Untitled')
-                response += f"• {title}\n"
-        
         return response
 
     def _extract_topic(self, query: str) -> str:

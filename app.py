@@ -306,8 +306,10 @@ class ChatbotUI:
             st.info("No database statistics available. Scrape news to see stats.")
 
     def extract_sources_from_response(self, response: str) -> List[dict]:
-        """Extract source information from response"""
+        """Extract source information from response and remove duplicates"""
         sources = []
+        seen_urls = set()
+        seen_titles = set()
         
         # Look for sources section in response
         if "**Sources:**" in response:
@@ -320,7 +322,19 @@ class ChatbotUI:
                 if line and line[0].isdigit():
                     # New source entry
                     if current_source:
-                        sources.append(current_source)
+                        # Check for duplicates before adding
+                        if current_source.get('url'):
+                            if current_source['url'] not in seen_urls:
+                                sources.append(current_source)
+                                seen_urls.add(current_source['url'])
+                        elif current_source.get('title'):
+                            # If no URL, use title for deduplication
+                            if current_source['title'] not in seen_titles:
+                                sources.append(current_source)
+                                seen_titles.add(current_source['title'])
+                        else:
+                            # If neither URL nor title, add it (shouldn't happen normally)
+                            sources.append(current_source)
                     
                     # Extract title and source name
                     match = re.search(r'\d+\.\s*\*\*(.*?)\*\*\s*-\s*(.*?)$', line)
@@ -333,9 +347,16 @@ class ChatbotUI:
                 elif line.startswith('Link:') and current_source:
                     current_source['url'] = line.replace('Link:', '').strip()
             
-            # Add the last source if exists
+            # Add the last source if exists and not duplicate
             if current_source:
-                sources.append(current_source)
+                if current_source.get('url'):
+                    if current_source['url'] not in seen_urls:
+                        sources.append(current_source)
+                elif current_source.get('title'):
+                    if current_source['title'] not in seen_titles:
+                        sources.append(current_source)
+                else:
+                    sources.append(current_source)
         
         return sources
 
@@ -356,7 +377,6 @@ class ChatbotUI:
         
         st.markdown("---")
         st.markdown("### 📰 Sources")
-        
         for i, source in enumerate(sources, 1):
             with st.expander(f"{i}. {source['title']} - {source['source']}", expanded=False):
                 if source['url']:
