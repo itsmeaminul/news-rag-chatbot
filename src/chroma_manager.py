@@ -18,7 +18,19 @@ logger = logging.getLogger(__name__)
 
 
 class ChromaManager:
-    """ChromaDB manager for vector operations (RAG-compliant semantic retrieval)"""
+    """
+    ChromaManager handles all operations related to the ChromaDB vector database for semantic retrieval (RAG).
+    
+    Responsibilities:
+    - Initialize and manage the ChromaDB persistent client and collection.
+    - Load and use a SentenceTransformer embedding model for text embeddings.
+    - Add article chunks (with metadata) to the vector database.
+    - Perform semantic search and metadata-based filtering.
+    - Provide combined search (semantic + metadata).
+    - Retrieve collection statistics.
+    - Reset or delete the collection.
+    - Load and index articles from a JSON file.
+    """
 
     def __init__(self):
         self.client = chromadb.PersistentClient(
@@ -32,6 +44,7 @@ class ChromaManager:
         self.collection = self._get_or_create_collection()
         logger.info("ChromaDB manager initialized successfully")
 
+    # Initialize the embedding model
     def _initialize_embedding_model(self):
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         logger.info(f"Using device: {device}")
@@ -44,6 +57,7 @@ class ChromaManager:
         logger.info(f"Embedding model loaded successfully on {device}")
         return model
 
+    # Get or create the ChromaDB collection
     def _get_or_create_collection(self):
         try:
             collection = self.client.get_collection(VECTORDB_CONFIG['collection_name'])
@@ -56,6 +70,7 @@ class ChromaManager:
             logger.info(f"Created new collection: {VECTORDB_CONFIG['collection_name']}")
         return collection
 
+    # Prepare metadata by ensuring all values are strings or simple types
     def _prepare_metadata(self, metadata: Dict) -> Dict:
         clean_metadata = {}
         for key, value in metadata.items():
@@ -69,6 +84,7 @@ class ChromaManager:
                 clean_metadata[key] = str(value)
         return clean_metadata
 
+    # Add chunks to the vector database
     def add_chunks(self, chunks: List[Dict]) -> bool:
         if not chunks:
             logger.warning("No chunks provided to add")
@@ -102,7 +118,8 @@ class ChromaManager:
         except Exception as e:
             logger.error(f"Error adding chunks to vector database: {e}")
             return False
-
+    
+    # Semantic search with optional metadata filtering
     def search_similar(self, query: str, n_results: int = None, where: Optional[Dict] = None) -> List[Dict]:
         """Semantic search using embedding model, with optional metadata filter"""
         if n_results is None:
@@ -132,7 +149,7 @@ class ChromaManager:
         except Exception as e:
             logger.error(f"Error searching vector database: {e}")
             return []
-
+    # Validate the structure of the where clause
     def _is_valid_where_clause(self, where: Dict) -> bool:
         try:
             if not isinstance(where, dict):
@@ -143,6 +160,7 @@ class ChromaManager:
         except Exception:
             return False
 
+    # Search by metadata only
     def search_by_metadata(self, where: Dict, n_results: int = None) -> List[Dict]:
         if n_results is None:
             n_results = VECTORDB_CONFIG['max_results']
@@ -170,12 +188,15 @@ class ChromaManager:
             logger.error(f"Error searching by metadata: {e}")
             return []
 
+    # Convenience methods for common metadata searches
     def search_by_category(self, category: str, n_results: int = 10) -> List[Dict]:
         return self.search_by_metadata({"category": {"$eq": category}}, n_results=n_results)
 
+    # Convenience methods for common metadata searches
     def search_by_source(self, source: str, n_results: int = 10) -> List[Dict]:
         return self.search_by_metadata({"source": {"$eq": source}}, n_results=n_results)
 
+    # Combined semantic and metadata search
     def combined_search(self, query: str, source: str = None, category: str = None, n_results: int = 10) -> List[Dict]:
         """Semantic search with optional metadata filtering"""
         try:
@@ -195,6 +216,7 @@ class ChromaManager:
             logger.error(f"Error in combined search: {e}")
             return []
 
+    # Get collection statistics
     def get_collection_stats(self) -> Dict:
         try:
             count = self.collection.count()
@@ -219,6 +241,7 @@ class ChromaManager:
             logger.error(f"Error getting collection stats: {e}")
             return {}
 
+    # Delete the entire collection
     def delete_collection(self) -> bool:
         try:
             self.client.delete_collection(VECTORDB_CONFIG['collection_name'])
@@ -228,6 +251,7 @@ class ChromaManager:
             logger.error(f"Error deleting collection: {e}")
             return False
 
+    # Reset the collection by deleting and recreating it
     def reset_collection(self) -> bool:
         try:
             self.delete_collection()
@@ -237,7 +261,8 @@ class ChromaManager:
         except Exception as e:
             logger.error(f"Error resetting collection: {e}")
             return False
-
+    
+    # Load and index articles from a JSON file
     def load_and_index_articles(self, filepath: str = None) -> bool:
         if not filepath:
             filepath = PROCESSED_ARTICLES_PATH
@@ -260,7 +285,6 @@ class ChromaManager:
         except Exception as e:
             logger.error(f"Error loading and indexing articles: {e}")
             return False
-
 
 def main():
     """Main function to test ChromaDB semantic retrieval"""

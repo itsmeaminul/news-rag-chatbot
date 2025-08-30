@@ -16,10 +16,28 @@ from .config import TEXT_PROCESSING_CONFIG, RAW_ARTICLES_PATH, PROCESSED_ARTICLE
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
+# TextProcessor class
 class TextProcessor:
-    """Text preprocessing and chunking class"""
-    
+    """
+    TextProcessor is responsible for preprocessing, cleaning, and chunking news articles.
+
+    Main responsibilities:
+    - Clean and normalize raw article text (remove noise, boilerplate, special characters, etc.)
+    - Extract and clean metadata (title, author, source, etc.)
+    - Split articles into meaningful text chunks using configurable strategies
+    - Detect and skip duplicate content using content hashes
+    - Extract keywords from titles for enhanced searchability
+    - Calculate title relevance scores for each chunk
+    - Save and load processed chunks to/from disk
+    - Provide processing statistics for reporting and debugging
+
+    Usage:
+        processor = TextProcessor()
+        chunks = processor.process_articles(articles)
+        processor.save_processed_chunks()
+        stats = processor.get_processing_stats()
+    """
+
     def __init__(self):
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=TEXT_PROCESSING_CONFIG['chunk_size'],
@@ -39,6 +57,7 @@ class TextProcessor:
         self.processed_chunks = []
         self.duplicate_hashes: Set[str] = set()
     
+    # Clean text function
     def clean_text(self, text: str) -> str:
         """Clean and normalize text content"""
         if not text:
@@ -87,6 +106,7 @@ class TextProcessor:
         
         return text
     
+    # Extract metadata function
     def extract_metadata(self, article: Dict) -> Dict:
         """Extract and clean metadata from article"""
         metadata = {
@@ -103,6 +123,7 @@ class TextProcessor:
         
         return metadata
     
+    # Check for duplicates using content hash
     def is_duplicate(self, text: str) -> bool:
         """Check if text is a duplicate using content hash"""
         text_hash = md5(text.encode('utf-8')).hexdigest()
@@ -113,6 +134,7 @@ class TextProcessor:
         self.duplicate_hashes.add(text_hash)
         return False
     
+    # Validate text content
     def is_valid_text(self, text: str) -> bool:
         """Check if text is valid for processing"""
         if not text or len(text.strip()) == 0:
@@ -130,6 +152,7 @@ class TextProcessor:
 
         return True
     
+    # Extract keywords from title
     def extract_title_keywords(self, title: str) -> List[str]:
         """Extract keywords from title for enhanced searchability"""
         if not title:
@@ -149,6 +172,7 @@ class TextProcessor:
         
         return keywords[:6]  # Limit to top 6 keywords
     
+    # Calculate title relevance score for a chunk
     def calculate_title_relevance(self, chunk_text: str, title: str) -> float:
         """Calculate how relevant a chunk is to the article title"""
         if not title:
@@ -179,8 +203,16 @@ class TextProcessor:
         
         return min(relevance, 1.0)
     
+    # Create text chunks from article
     def create_chunks(self, article: Dict) -> List[Dict]:
-        """Create text chunks from article"""
+        """
+        Create text chunks from a single article.
+
+        Strategies:
+        - Create a dedicated title summary chunk
+        - Create title-emphasized content chunks
+        - Create keyword-focused chunks if strong title keywords exist
+        """
         content = article.get('content', '')
         title = article.get('title', '')
         
@@ -267,7 +299,7 @@ class TextProcessor:
                 processed_chunks.append(chunk_data)
                 chunk_counter += 1
         
-        # Strategy 3: Create keyword-focused chunks if we have strong title keywords
+        # Strategy 3: Create keyword-focused chunks if have strong title keywords
         if len(title_keywords) >= 2:
             keyword_text = f"Key Topics: {', '.join(title_keywords)}\n"
             keyword_text += f"Article: {cleaned_title}\n\n"
@@ -309,6 +341,7 @@ class TextProcessor:
         logger.info(f"Created {len(processed_chunks)} chunks for: {cleaned_title[:50]}...")
         return processed_chunks
     
+    # Get stop words for title keyword extraction
     def get_stop_words(self) -> set:
         """Return set of stop words for title keyword extraction"""
         return {
@@ -317,8 +350,13 @@ class TextProcessor:
             'has', 'have', 'had', 'will', 'would', 'could', 'should', 'may', 'might'
         }
     
+    # Process a list of articles
     def process_articles(self, articles: List[Dict]) -> List[Dict]:
-        """Process all articles into chunks"""
+        """
+        Process a list of articles into text chunks.
+
+        Returns a flat list of all processed chunks.
+        """
         logger.info(f"Processing {len(articles)} articles...")
         
         all_chunks = []
@@ -350,6 +388,7 @@ class TextProcessor:
         self.processed_chunks = all_chunks
         return all_chunks
     
+    # Save processed chunks to JSON file
     def save_processed_chunks(self, filepath: str = None) -> None:
         """Save processed chunks to JSON file"""
         if not filepath:
@@ -360,6 +399,7 @@ class TextProcessor:
         
         logger.info(f"Saved {len(self.processed_chunks)} processed chunks to {filepath}")
     
+    # Load processed chunks from JSON file
     def load_processed_chunks(self, filepath: str = None) -> List[Dict]:
         """Load processed chunks from JSON file"""
         if not filepath:
@@ -380,8 +420,13 @@ class TextProcessor:
             logger.error(f"Error loading processed chunks from {filepath}: {e}")
             return []
     
+    # Get processing statistics
     def get_processing_stats(self) -> Dict:
-        """Get statistics about processed chunks"""
+        """
+        Get statistics about processed chunks.
+
+        Returns a dictionary with counts, averages, and ratios for reporting.
+        """
         if not self.processed_chunks:
             return {}
         
@@ -410,7 +455,6 @@ class TextProcessor:
             'high_title_relevance_chunks': high_title_relevance,
             'title_enhancement_ratio': round(title_chunks / total_chunks, 3)
         }
-
 
 def main():
     """Main function to run text processing"""

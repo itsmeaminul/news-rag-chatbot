@@ -3,7 +3,27 @@ Prompt templates for the RAG pipeline
 """
 from typing import List
 
+
 class PromptTemplates:
+    """
+    Collection of prompt templates and utility methods for generating prompts used by the news chatbot.
+    This class provides structured prompt templates for various chatbot tasks, including:
+    - System persona and behavior definition
+    - General search and question answering
+    - Executive summaries
+    - Trending news identification
+    - Handling cases with no relevant sources
+    Each template enforces strict grounding to the provided news article context, mandates source attribution, and ensures objective, well-structured responses. The class also includes class methods to format and retrieve these prompts with dynamic content.
+    Methods:
+        get_summary_prompt(topic: str, context: str) -> str:
+            Returns a formatted executive summary prompt for a given topic and context.
+        get_trending_prompt(context: str) -> str:
+            Returns a formatted prompt for identifying trending news stories from the given context.
+        get_general_search_prompt(query: str, context: str) -> str:
+            Returns a formatted prompt for answering a user's question based on the provided news articles context.
+        get_no_sources_response(query: str, suggestions: List[str] = None) -> str:
+            Returns a formatted response when no relevant sources are found, including alternative search suggestions.
+    """
     """Collection of prompt templates for the news chatbot"""
     
     # SYSTEM_PROMPT: Refined persona and added stricter rules for synthesis and grounding.
@@ -136,6 +156,40 @@ Would you like me to help you with any other topics from the available articles?
 
 
 class ResponseMessages:
+    """
+    Collection of standard response message templates for the news RAG chatbot.
+    This class provides user-facing messages for various scenarios encountered during
+    news article search and retrieval, such as errors, no results found, successful
+    queries, and outdated data warnings. Messages are designed to guide users with
+    actionable suggestions and clear status updates.
+    Attributes:
+        NO_ARTICLES_LOADED (str): Message shown when no articles are loaded in the database.
+        DATABASE_ERROR (str): Message for technical/database errors during search.
+        INITIALIZATION_ERROR (str): Message for database initialization or connectivity issues.
+        NO_RELEVANT_ARTICLES (str): Message when no articles match the user's query.
+        NO_CLOSE_MATCHES (str): Message when only loosely related articles are found.
+        NO_TITLE_MATCHES (str): Message when no articles match the topic in their titles.
+        COUNT_ARTICLES_RESPONSE (str): Message summarizing the number of loaded articles and sources.
+        COUNT_ARTICLES_WITH_SOURCES (str): Message listing available news sources.
+        COUNT_TOPIC_RESPONSE (str): Message summarizing the number of articles found for a topic.
+        COUNT_TOPIC_WITH_SOURCES (str): Message with a breakdown of sources for a topic.
+        NO_TRENDING_NEWS (str): Message when trending news cannot be shown.
+        OUTDATED_ARTICLES_WARNING (str): Warning message for outdated article data.
+    Methods:
+        get_no_relevant_articles(query: str) -> str:
+            Returns a formatted message when no relevant articles are found for the query.
+        get_no_close_matches(topic: str) -> str:
+            Returns a formatted message when only loosely related articles are found.
+        get_no_title_matches(topic: str) -> str:
+            Returns a formatted message when no articles match the topic in their titles.
+        get_count_articles_response(total_chunks: int, unique_sources: int, sources: List[str] = None) -> str:
+            Returns a formatted message summarizing the number of loaded articles and sources.
+        get_count_topic_response(count: int, topic: str, sources_breakdown: str = None) -> str:
+            Returns a formatted message summarizing the number of articles found for a topic,
+            optionally including a breakdown by source.
+        get_outdated_warning(topic: str, date_range: str, available_info: str) -> str:
+            Returns a formatted warning message when articles are outdated.
+    """
     """Collection of standard response messages with improved source handling"""
     
     # Error messages
@@ -299,7 +353,7 @@ Please try loading news articles first, then ask your question again."""
 
 
 class PromptBuilder:
-    """Enhanced builder class for constructing complex prompts with better source handling"""
+    """Prompt builder class for constructing complex prompts with better source handling"""
     
     def __init__(self):
         self.context = ""

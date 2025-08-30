@@ -22,7 +22,19 @@ logger = logging.getLogger(__name__)
 
 # Data class for news articles
 class NewsArticle:
-    """Data class for news articles"""
+    """
+    Represents a news article with metadata and content.
+
+    Attributes:
+        title (str): The title of the article.
+        content (str): The main body/content of the article.
+        url (str): The URL where the article was found.
+        source (str): The news source identifier.
+        published_date (str, optional): The date the article was published.
+        author (str, optional): The author of the article.
+        category (str, optional): The category or section of the article.
+        scraped_at (str): The timestamp when the article was scraped.
+    """
 
     def __init__(self, title: str, content: str, url: str, source: str,
                  published_date: str = None, author: str = None, category: str = None):
@@ -36,6 +48,7 @@ class NewsArticle:
         self.scraped_at = datetime.now().isoformat()
 
     def to_dict(self) -> Dict:
+        """Convert the NewsArticle instance to a dictionary."""
         return {
             "title": self.title,
             "content": self.content,
@@ -49,7 +62,18 @@ class NewsArticle:
 
 # Scraper with parallel fetching and processing
 class NewsScraper:
-    """Fetches articles using RSS feeds and parallel web scraping"""
+    """
+    Fetches and processes news articles from multiple sources using RSS feeds and web scraping.
+
+    Attributes:
+        articles (List[NewsArticle]): List of scraped articles.
+        session (requests.Session): HTTP session for requests.
+        request_timeout (int): Timeout for HTTP requests.
+        delay_min (float): Minimum delay between requests.
+        delay_max (float): Maximum delay between requests.
+        max_workers (int): Maximum number of threads for parallel processing.
+        max_articles_per_source (int): Maximum articles to fetch per source.
+    """
 
     def __init__(self):
         self.articles: List[NewsArticle] = []
@@ -68,6 +92,15 @@ class NewsScraper:
         time.sleep(random.uniform(self.delay_min, self.delay_max))
 
     def _get(self, url: str) -> Optional[requests.Response]:
+        """
+        Perform a GET request with error handling and encoding fixes.
+
+        Args:
+            url (str): The URL to fetch.
+
+        Returns:
+            Optional[requests.Response]: The HTTP response or None if failed.
+        """
         try:
             self._polite_delay()
             r = self.session.get(url, timeout=self.request_timeout)
@@ -82,7 +115,17 @@ class NewsScraper:
     
     # Fetching and parsing RSS feeds
     def fetch_rss_feed(self, source: str, section: Optional[str], rss_url: str) -> List[NewsArticle]:
-        """Fetch and parse a single RSS feed"""
+        """
+        Fetch and parse a single RSS feed.
+
+        Args:
+            source (str): The news source identifier.
+            section (Optional[str]): The section/category of the feed.
+            rss_url (str): The RSS feed URL.
+
+        Returns:
+            List[NewsArticle]: List of articles parsed from the feed.
+        """
         try:
             logger.info(f"[RSS] {source}:{section or '-'} -> {rss_url}")
             resp = self._get(rss_url)
@@ -123,7 +166,16 @@ class NewsScraper:
 
     # Content Extraction
     def extract_article_content(self, url: str, source: str) -> str:
-        """Extract full article content using site-specific selectors"""
+        """
+        Extract full article content using site-specific selectors.
+
+        Args:
+            url (str): The article URL.
+            source (str): The news source identifier.
+
+        Returns:
+            str: The extracted article content.
+        """
         try:
             resp = self._get(url)
             if not resp:
@@ -157,7 +209,17 @@ class NewsScraper:
             return ""
 
     def enrich_article_metadata_from_html(self, url: str, article: NewsArticle, source: str) -> NewsArticle:
-        """Fetch HTML and fill missing title/author/category using selectors"""
+        """
+        Fetch HTML and fill missing title/author/category using selectors.
+
+        Args:
+            url (str): The article URL.
+            article (NewsArticle): The article object to enrich.
+            source (str): The news source identifier.
+
+        Returns:
+            NewsArticle: The enriched article object.
+        """
         resp = self._get(url)
         if not resp:
             return article
@@ -190,7 +252,17 @@ class NewsScraper:
 
     # Homepage scraping if RSS unavailable
     def scrape_homepage(self, source: str, base_url: str, sections: List[str]) -> List[NewsArticle]:
-        """Basic homepage scraping if RSS unavailable"""
+        """
+        Basic homepage scraping if RSS is unavailable.
+
+        Args:
+            source (str): The news source identifier.
+            base_url (str): The homepage URL.
+            sections (List[str]): List of section names.
+
+        Returns:
+            List[NewsArticle]: List of articles scraped from the homepage.
+        """
         resp = self._get(base_url)
         if not resp:
             return []
@@ -220,7 +292,17 @@ class NewsScraper:
 
     # Parallel fetching and processing
     def _parallel_fetch_rss_for_source(self, source: str, rss_feeds: List[str], sections: List[str]) -> List[NewsArticle]:
-        """Fetch multiple RSS feeds for a source in parallel"""
+        """
+        Fetch multiple RSS feeds for a source in parallel.
+
+        Args:
+            source (str): The news source identifier.
+            rss_feeds (List[str]): List of RSS feed URLs.
+            sections (List[str]): List of section names.
+
+        Returns:
+            List[NewsArticle]: List of articles fetched from all feeds.
+        """
         results: List[NewsArticle] = []
 
         # Prepare tasks
@@ -249,7 +331,15 @@ class NewsScraper:
         return results[:self.max_articles_per_source]
 
     def _parallel_enrich_articles(self, articles: List[NewsArticle]) -> List[NewsArticle]:
-        """Fetch full content + metadata in parallel for articles with short bodies"""
+        """
+        Fetch full content and missing metadata in parallel for articles with short bodies.
+
+        Args:
+            articles (List[NewsArticle]): List of articles to enrich.
+
+        Returns:
+            List[NewsArticle]: List of enriched articles.
+        """
         def work(art: NewsArticle) -> NewsArticle:
             try:
                 if len(art.content or "") < 200:
@@ -273,7 +363,12 @@ class NewsScraper:
 
     # Public Orchestration
     def scrape_all_sources(self) -> List[NewsArticle]:
-        """Scrape all sources defined in config (parallel where possible)"""
+        """
+        Scrape all sources defined in config (parallel where possible).
+
+        Returns:
+            List[NewsArticle]: List of all unique, enriched articles.
+        """
         all_articles: List[NewsArticle] = []
 
         for source, info in NEWS_SOURCES.items():
@@ -310,10 +405,29 @@ class NewsScraper:
     # Helpers
     # Simple heuristic to filter out non-article links
     def is_valid_article_link(self, url: str) -> bool:
+        """
+        Heuristic to filter out non-article links.
+
+        Args:
+            url (str): The URL to check.
+
+        Returns:
+            bool: True if the URL is likely an article, False otherwise.
+        """
         blacklist = ["auth", "login", "signup", "account", "privacy", "terms", "#"]
         return not any(b in url for b in blacklist)
 
     def infer_category_from_url(self, url: str, sections: List[str]) -> Optional[str]:
+        """
+        Infer the article category from its URL.
+
+        Args:
+            url (str): The article URL.
+            sections (List[str]): List of section names.
+
+        Returns:
+            Optional[str]: The inferred category or None.
+        """
         parts = url.lower().split("/")
         for section in sections:
             sec_parts = section.lower().split("/")
@@ -322,6 +436,12 @@ class NewsScraper:
         return None
 
     def save_articles(self, filepath: str = None):
+        """
+        Save the scraped articles to a JSON file.
+
+        Args:
+            filepath (str, optional): The file path to save articles. Defaults to RAW_ARTICLES_PATH.
+        """
         if not filepath:
             filepath = RAW_ARTICLES_PATH
         path = Path(filepath)
@@ -329,7 +449,6 @@ class NewsScraper:
         with open(path, "w", encoding="utf-8") as f:
             json.dump([a.to_dict() for a in self.articles], f, ensure_ascii=False, indent=2)
         logger.info(f"Saved {len(self.articles)} articles to {filepath}")
-
 
 def main():
     scraper = NewsScraper()

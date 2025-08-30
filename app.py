@@ -21,8 +21,52 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class ChatbotUI:
+    """
+    Streamlit UI for the news chatbot.
+    This class encapsulates all UI logic and user interactions for a Retrieval-Augmented Generation (RAG) based
+    news chatbot application. It manages Streamlit page configuration, session state, chat history, database
+    management, and the main chat interface. The class also provides methods for scraping, processing, and
+    indexing news articles, as well as formatting and displaying chatbot responses with source attribution.
+    Methods
+    -------
+    __init__():
+        Initialize the UI, session state, and placeholders for RAG pipeline and database manager.
+    setup_page_config():
+        Configure Streamlit page settings and apply custom CSS for UI formatting.
+    initialize_session_state():
+        Initialize Streamlit session state variables for chat, database, and UI state management.
+    load_rag_pipeline():
+        Load and initialize the RAG pipeline and database manager if not already initialized.
+    render_sidebar():
+        Render the sidebar with controls for chat management, database actions, and sample queries.
+    start_new_chat():
+        Start a new chat session, preserving previous chat history and resetting session state.
+    scrape_news():
+        Scrape news articles from predefined sources, save them, and trigger processing and indexing.
+    process_articles(auto_trigger=False):
+        Process scraped articles into text chunks for indexing.
+    index_articles(auto_trigger=False):
+        Index processed article chunks into the vector database.
+    reset_database():
+        Reset the vector database, clearing all indexed articles.
+    display_database_stats():
+        Display statistics about the current state of the database in the sidebar.
+    extract_sources_from_response(response: str) -> List[dict]:
+        Extract and deduplicate source information from a chatbot response string.
+    format_response_with_sources(response: str) -> tuple:
+        Separate the main response content from the sources section in a chatbot response.
+    render_sources_section(sources: List[dict]):
+        Render a formatted section in the UI displaying sources for a chatbot response.
+    render_main_chat():
+        Render the main chat interface, displaying chat history and handling user input.
+    process_user_query(query: str):
+        Process a user query, obtain a response from the RAG pipeline, and display it with sources.
+    run():
+        Main entry point to render the sidebar and main chat interface.
+    """
     """Streamlit UI for the news chatbot"""
 
+    # Initialize the UI and session state
     def __init__(self):
         self.setup_page_config()
         self.initialize_session_state()

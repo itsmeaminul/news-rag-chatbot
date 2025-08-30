@@ -18,16 +18,30 @@ logger = logging.getLogger(__name__)
 
 os.environ["CHROMA_TELEMETRY"] = "false"
 
-
+# Document Retriever
 class RAGRetriever:
-    """Document retriever with embedding-based search"""
+    """
+    Document retriever with embedding-based search.
+
+    This class is responsible for retrieving relevant documents from the vector store
+    using semantic similarity based on sentence embeddings.
+    """
     
     def __init__(self, vector_store: ChromaManager):
         self.vector_store = vector_store
         self.embedding_model = SentenceTransformer(VECTORDB_CONFIG['embedding_model'])
     
     def retrieve_documents(self, query: str, top_k: int = 20) -> List[Dict]:
-        """Retrieve candidate documents using semantic similarity"""
+        """
+        Retrieve candidate documents using semantic similarity.
+
+        Args:
+            query (str): The user query.
+            top_k (int): Number of top documents to retrieve.
+
+        Returns:
+            List[Dict]: List of retrieved documents with scores and metadata.
+        """
         try:
             results = self.vector_store.search_similar(query=query, n_results=top_k)
             
@@ -43,9 +57,14 @@ class RAGRetriever:
             logger.error(f"Error in document retrieval: {e}")
             return []
 
-
+# Re-ranker
 class ResultReranker:
-    """Re-rank retrieved documents using cross-encoder and fallback scoring"""
+    """
+    Re-rank retrieved documents using cross-encoder and fallback scoring.
+
+    This class uses a cross-encoder model to re-rank the retrieved documents for better relevance.
+    If the cross-encoder is unavailable, it falls back to using the retrieval score.
+    """
     
     def __init__(self):
         try:
@@ -56,7 +75,16 @@ class ResultReranker:
             logger.warning(f"Could not load cross-encoder: {e}. Using fallback re-ranking.")
     
     def rerank_results(self, candidates: List[Dict], query: str) -> List[Dict]:
-        """Re-rank candidates using cross-encoder or fallback"""
+        """
+        Re-rank candidates using cross-encoder or fallback.
+
+        Args:
+            candidates (List[Dict]): List of candidate documents.
+            query (str): The user query.
+
+        Returns:
+            List[Dict]: Re-ranked list of documents.
+        """
         if not candidates:
             return candidates
         
@@ -87,15 +115,27 @@ class ResultReranker:
             logger.error(f"Error in re-ranking: {e}")
             return candidates
 
-
+# Context Optimizer
 class ContextOptimizer:
-    """Optimize context for LLM input"""
+    """
+    Optimize context for LLM input.
+
+    This class selects and formats the most relevant document snippets to fit within the LLM's context window.
+    """
     
     def __init__(self):
         self.max_context_length = SEARCH_CONFIG.get('max_context_length', 4000)
     
     def optimize_context(self, documents: List[Dict]) -> str:
-        """Create optimized context from selected documents"""
+        """
+        Create optimized context from selected documents.
+
+        Args:
+            documents (List[Dict]): List of documents to include in the context.
+
+        Returns:
+            str: Optimized context string.
+        """
         if not documents:
             return ""
         
@@ -123,7 +163,16 @@ class ContextOptimizer:
         return optimized_context
     
     def _format_document_snippet(self, doc: Dict, doc_num: int) -> str:
-        """Format a document snippet for context"""
+        """
+        Format a document snippet for context.
+
+        Args:
+            doc (Dict): Document dictionary.
+            doc_num (int): Document number in the context.
+
+        Returns:
+            str: Formatted snippet string.
+        """
         metadata = doc['metadata']
         
         snippet = f"Document {doc_num}:\n"
@@ -136,7 +185,11 @@ class ContextOptimizer:
 
 
 class OllamaLLM:
-    """Ollama LLM client for local inference"""
+    """
+    Ollama LLM client for local inference.
+
+    This class handles communication with a locally hosted Ollama LLM server for generating responses.
+    """
 
     def __init__(self):
         self.base_url = LLM_CONFIG['base_url']
@@ -146,6 +199,12 @@ class OllamaLLM:
         self._test_connection()
 
     def _test_connection(self) -> bool:
+        """
+        Test connection to Ollama server.
+
+        Returns:
+            bool: True if connection is successful, False otherwise.
+        """
         try:
             response = requests.get(f"{self.base_url}/api/tags", timeout=5)
             response.raise_for_status()
@@ -156,6 +215,16 @@ class OllamaLLM:
             return False
 
     def generate(self, prompt: str, system_prompt: str = None) -> str:
+        """
+        Generate response from Ollama.
+
+        Args:
+            prompt (str): The user prompt.
+            system_prompt (str, optional): System prompt for the LLM.
+
+        Returns:
+            str: Generated response.
+        """
         try:
             payload = {
                 "model": self.model_name,
@@ -186,9 +255,12 @@ class OllamaLLM:
             logger.error(f"Error generating response: {e}")
             return ResponseMessages.INITIALIZATION_ERROR
 
-
 class GroqLLM:
-    """Groq API client"""
+    """
+    Groq API client.
+
+    This class handles communication with the Groq API for generating responses using hosted LLMs.
+    """
 
     def __init__(self, model_name=None):
         self.api_key = LLM_PROVIDER["groq_api_key"]
@@ -199,6 +271,16 @@ class GroqLLM:
             raise EnvironmentError("GROQ_API_KEY missing in .env")
 
     def generate(self, prompt: str, system_prompt: str = None) -> str:
+        """
+        Generate response from Groq API.
+
+        Args:
+            prompt (str): The user prompt.
+            system_prompt (str, optional): System prompt for the LLM.
+
+        Returns:
+            str: Generated response.
+        """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -224,9 +306,13 @@ class GroqLLM:
         except Exception as e:
             return f"Error generating response from Groq API: {e}"
 
-
 class RAGPipeline:
-    """RAG pipeline"""
+    """
+    RAG pipeline.
+
+    This class orchestrates the entire Retrieval-Augmented Generation process,
+    including retrieval, re-ranking, context optimization, and LLM response generation.
+    """
     
     def __init__(self):
         self.db_manager = ChromaManager()
@@ -238,7 +324,15 @@ class RAGPipeline:
         logger.info("RAG pipeline initialized")
     
     def process_query(self, user_query: str) -> str:
-        """Query processing with better intent detection"""
+        """
+        Query processing with better intent detection.
+
+        Args:
+            user_query (str): The user's input query.
+
+        Returns:
+            str: The generated response.
+        """
         try:
             # Check if database has articles
             stats = self.db_manager.get_collection_stats()
@@ -280,20 +374,20 @@ class RAGPipeline:
             return ResponseMessages.DATABASE_ERROR
 
     def _handle_count_query(self, query: str, stats: Dict) -> str:
-        """Handle queries asking for article counts"""
-        total_chunks = stats.get('total_chunks', 0)
-        unique_sources = stats.get('unique_sources', 0)
-        sources = stats.get('sources', [])
-        
-        response = f"📊 **Database Statistics**\n\n"
-        response += f"I currently have **{total_chunks}** article chunks from **{unique_sources}** news sources.\n\n"
-        
-        if sources:
-            response += "**Sources include:**\n"
-            for source in sources:
-                response += f"• {source}\n"
-        
-        return response
+            """Handle queries asking for article counts"""
+            total_chunks = stats.get('total_chunks', 0)
+            unique_sources = stats.get('unique_sources', 0)
+            sources = stats.get('sources', [])
+            
+            response = f"📊 **Database Statistics**\n\n"
+            response += f"I currently have **{total_chunks}** article chunks from **{unique_sources}** news sources.\n\n"
+            
+            if sources:
+                response += "**Sources include:**\n"
+                for source in sources:
+                    response += f"• {source}\n"
+            
+            return response
 
     def _handle_date_query(self, date_ref: str) -> str:
         """Handle date-specific article queries"""
@@ -467,7 +561,6 @@ class RAGPipeline:
             sources_str += f"   Snippet: {doc['text'][:200]}...\n\n"
         
         return sources_str
-
 
 def main():
     print("🚀 Starting Simplified RAG Pipeline...")

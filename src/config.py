@@ -146,7 +146,6 @@ QUERY_CONFIG = {
         "tell", "me", "about", "give", "show", "summary", "summarize", "latest", "recent",
         "trending", "today", "news", "articles", "article", "from", "get", "find"
     ],
-    "intent_confidence_threshold": 0.6,
     "title_phrase_patterns": [
         r"news about (.+)",
         r"article about (.+)", 
