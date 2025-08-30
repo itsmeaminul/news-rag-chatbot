@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class TextProcessor:
-    """Enhanced text preprocessing and chunking class with title emphasis"""
+    """Text preprocessing and chunking class"""
     
     def __init__(self):
         self.text_splitter = RecursiveCharacterTextSplitter(
@@ -180,7 +180,7 @@ class TextProcessor:
         return min(relevance, 1.0)
     
     def create_chunks(self, article: Dict) -> List[Dict]:
-        """Create text chunks from article with enhanced title emphasis"""
+        """Create text chunks from article"""
         content = article.get('content', '')
         title = article.get('title', '')
         
@@ -306,7 +306,7 @@ class TextProcessor:
         for chunk in processed_chunks:
             chunk['metadata']['total_chunks'] = len(processed_chunks)
         
-        logger.info(f"Created {len(processed_chunks)} chunks (with title emphasis) for: {cleaned_title[:50]}...")
+        logger.info(f"Created {len(processed_chunks)} chunks for: {cleaned_title[:50]}...")
         return processed_chunks
     
     def get_stop_words(self) -> set:
@@ -318,8 +318,8 @@ class TextProcessor:
         }
     
     def process_articles(self, articles: List[Dict]) -> List[Dict]:
-        """Process all articles into chunks with title emphasis"""
-        logger.info(f"Processing {len(articles)} articles with title emphasis...")
+        """Process all articles into chunks"""
+        logger.info(f"Processing {len(articles)} articles...")
         
         all_chunks = []
         processed_count = 0
@@ -381,7 +381,7 @@ class TextProcessor:
             return []
     
     def get_processing_stats(self) -> Dict:
-        """Get enhanced statistics about processed chunks"""
+        """Get statistics about processed chunks"""
         if not self.processed_chunks:
             return {}
         
@@ -413,7 +413,7 @@ class TextProcessor:
 
 
 def main():
-    """Main function to run enhanced text processing"""
+    """Main function to run text processing"""
     # Load raw articles
     try:
         with open(RAW_ARTICLES_PATH, 'r', encoding='utf-8', errors='ignore') as f:
@@ -422,14 +422,14 @@ def main():
         logger.error(f"Raw articles file not found at {RAW_ARTICLES_PATH}")
         return
     
-    # Process articles with title emphasis
+    # Process articles
     processor = TextProcessor()
     chunks = processor.process_articles(articles)
     processor.save_processed_chunks()
     
-    # Print enhanced statistics
+    # Print statistics
     stats = processor.get_processing_stats()
-    print("\nEnhanced Processing Statistics:")
+    print("\nProcessing Statistics:")
     for key, value in stats.items():
         print(f"{key}: {value}")
 

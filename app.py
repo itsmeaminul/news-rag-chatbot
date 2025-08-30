@@ -162,10 +162,10 @@ class ChatbotUI:
             st.subheader("💡 Sample Queries")
             sample_queries = [
                 "What is the trending news today?",
-                "How many articles are there?",
                 "Tell me about Bangladesh politics",
                 "Summary of recent sports news",
                 "Latest news from Prothom Alo",
+                "How many articles are there?",
             ]
 
             for query in sample_queries:

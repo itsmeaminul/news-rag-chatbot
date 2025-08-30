@@ -2,22 +2,138 @@
 RAG (Retrieval-Augmented Generation) pipeline for news chatbot
 """
 import logging
-import re
 import os
-from typing import Dict, List, Optional, Set
+from typing import Dict, List
 
 import requests
+from sentence_transformers import SentenceTransformer, CrossEncoder
 
-from .config import LLM_CONFIG, USE_LOCAL, LLM_PROVIDER
+from .config import LLM_CONFIG, USE_LOCAL, LLM_PROVIDER, VECTORDB_CONFIG, SEARCH_CONFIG
 from .chroma_manager import ChromaManager
-from .prompts import PromptTemplates, ResponseMessages, PromptBuilder
+from .prompts import PromptTemplates, ResponseMessages
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 os.environ["CHROMA_TELEMETRY"] = "false"
+
+
+class RAGRetriever:
+    """Document retriever with embedding-based search"""
+    
+    def __init__(self, vector_store: ChromaManager):
+        self.vector_store = vector_store
+        self.embedding_model = SentenceTransformer(VECTORDB_CONFIG['embedding_model'])
+    
+    def retrieve_documents(self, query: str, top_k: int = 20) -> List[Dict]:
+        """Retrieve candidate documents using semantic similarity"""
+        try:
+            results = self.vector_store.search_similar(query=query, n_results=top_k)
+            
+            # Add retrieval score and metadata
+            for i, result in enumerate(results):
+                result['retrieval_rank'] = i + 1
+                result['retrieval_score'] = result.get('similarity', 0)
+            
+            logger.info(f"Retrieved {len(results)} candidate documents")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in document retrieval: {e}")
+            return []
+
+
+class ResultReranker:
+    """Re-rank retrieved documents using cross-encoder and fallback scoring"""
+    
+    def __init__(self):
+        try:
+            self.cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+            logger.info("Cross-encoder loaded for re-ranking")
+        except Exception as e:
+            self.cross_encoder = None
+            logger.warning(f"Could not load cross-encoder: {e}. Using fallback re-ranking.")
+    
+    def rerank_results(self, candidates: List[Dict], query: str) -> List[Dict]:
+        """Re-rank candidates using cross-encoder or fallback"""
+        if not candidates:
+            return candidates
+        
+        try:
+            # Strategy 1: Cross-encoder re-ranking
+            if self.cross_encoder and len(candidates) > 1:
+                pairs = [[query, doc['text']] for doc in candidates]
+                cross_scores = self.cross_encoder.predict(pairs)
+                
+                for i, doc in enumerate(candidates):
+                    doc['cross_encoder_score'] = float(cross_scores[i])
+            else:
+                # Fallback: use retrieval score
+                for doc in candidates:
+                    doc['cross_encoder_score'] = doc.get('similarity', 0.5)
+            
+            # Final score (just cross-encoder for simplicity)
+            for doc in candidates:
+                doc['final_score'] = doc['cross_encoder_score']
+            
+            # Sort by final score
+            reranked = sorted(candidates, key=lambda x: x['final_score'], reverse=True)
+            
+            logger.info(f"Re-ranked {len(reranked)} documents")
+            return reranked
+            
+        except Exception as e:
+            logger.error(f"Error in re-ranking: {e}")
+            return candidates
+
+
+class ContextOptimizer:
+    """Optimize context for LLM input"""
+    
+    def __init__(self):
+        self.max_context_length = SEARCH_CONFIG.get('max_context_length', 4000)
+    
+    def optimize_context(self, documents: List[Dict]) -> str:
+        """Create optimized context from selected documents"""
+        if not documents:
+            return ""
+        
+        context_parts = []
+        current_length = 0
+        
+        sorted_docs = sorted(documents, key=lambda x: x.get('final_score', 0), reverse=True)
+        
+        for i, doc in enumerate(sorted_docs):
+            snippet = self._format_document_snippet(doc, i + 1)
+            
+            if current_length + len(snippet) > self.max_context_length:
+                remaining_space = self.max_context_length - current_length - 200
+                if remaining_space > 500:
+                    truncated_text = doc['text'][:remaining_space] + "..."
+                    snippet = self._format_document_snippet({**doc, 'text': truncated_text}, i + 1)
+                    context_parts.append(snippet)
+                break
+            
+            context_parts.append(snippet)
+            current_length += len(snippet)
+        
+        optimized_context = "\n\n".join(context_parts)
+        logger.info(f"Optimized context: {len(optimized_context)} characters from {len(context_parts)} documents")
+        return optimized_context
+    
+    def _format_document_snippet(self, doc: Dict, doc_num: int) -> str:
+        """Format a document snippet for context"""
+        metadata = doc['metadata']
+        
+        snippet = f"Document {doc_num}:\n"
+        snippet += f"Title: {metadata.get('title', 'Untitled')}\n"
+        snippet += f"Source: {metadata.get('source', 'Unknown')}\n"
+        snippet += f"Date: {metadata.get('published_date', 'Unknown')}\n"
+        snippet += f"Content: {doc['text']}\n"
+        
+        return snippet
+
 
 class OllamaLLM:
     """Ollama LLM client for local inference"""
@@ -27,12 +143,9 @@ class OllamaLLM:
         self.model_name = LLM_CONFIG['model_name']
         self.temperature = LLM_CONFIG['temperature']
         self.max_tokens = LLM_CONFIG['max_tokens']
-
-        # Test connection
         self._test_connection()
 
     def _test_connection(self) -> bool:
-        """Test connection to Ollama server"""
         try:
             response = requests.get(f"{self.base_url}/api/tags", timeout=5)
             response.raise_for_status()
@@ -43,7 +156,6 @@ class OllamaLLM:
             return False
 
     def generate(self, prompt: str, system_prompt: str = None) -> str:
-        """Generate response using Ollama"""
         try:
             payload = {
                 "model": self.model_name,
@@ -74,11 +186,11 @@ class OllamaLLM:
             logger.error(f"Error generating response: {e}")
             return ResponseMessages.INITIALIZATION_ERROR
 
+
 class GroqLLM:
     """Groq API client"""
 
     def __init__(self, model_name=None):
-        from .config import LLM_PROVIDER
         self.api_key = LLM_PROVIDER["groq_api_key"]
         self.model = model_name or LLM_PROVIDER["groq_model"]
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
@@ -101,7 +213,7 @@ class GroqLLM:
             "model": self.model,
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 500,
+            "max_tokens": 1500,
         }
 
         try:
@@ -113,665 +225,280 @@ class GroqLLM:
             return f"Error generating response from Groq API: {e}"
 
 
-class TitleFocusedQueryProcessor:
-    """Query processor with strong title emphasis"""
-
-    def __init__(self):
-        # News sources mapping
-        self.source_mapping = {
-            'prothom alo': 'prothom_alo',
-            'prothomalo': 'prothom_alo',
-            'daily star': 'daily_star',
-            'thedailystar': 'daily_star',
-            'bdnews24': 'bdnews24',
-            'bdnews': 'bdnews24'
-        }
-        
-        self.category_mapping = {
-            'sports': ['sports', 'sport', 'cricket', 'football', 'soccer', 'match', 'tournament', 'team', 'player'],
-            'bangladesh': ['bangladesh', 'politics', 'govt', 'government', 'political', 'minister', 'parliament', 'prime minister'],
-            'international': ['international', 'world', 'global', 'foreign', 'diplomatic', 'embassy'],
-            'entertainment': ['entertainment', 'culture', 'movie', 'cinema', 'film', 'actor', 'celebrity', 'music'],
-            'business': ['business', 'economy', 'economic', 'trade', 'finance', 'market', 'investment', 'bank'],
-            'lifestyle': ['lifestyle', 'health', 'fashion', 'food', 'travel', 'hospital', 'medical']
-        }
-
-    def extract_intent_and_entities(self, query: str) -> Dict:
-        """Extract intent and entities from user query with enhanced title-matching focus"""
-        query_lower = query.lower().strip()
-        
-        intent_data = {
-            'intent': 'general_search',
-            'topic': None,
-            'source': None,
-            'category': None,
-            'search_terms': [],
-            'title_keywords': [],
-            'is_title_query': False,
-            'exact_phrase': None,
-            'original_query': query
-        }
-
-        # Detect if user is asking about specific news by title-like phrases
-        title_indicators = [
-            r'news about (.+)',
-            r'article about (.+)',
-            r'story about (.+)',
-            r'what happened with (.+)',
-            r'tell me about (.+?) news',
-            r'(.+?) news',
-            r'latest on (.+)',
-            r'update on (.+)',
-            r'headlines about (.+)',
-            r'reports on (.+)',
-            r'what is the matter\?*$',
-            r'what.*happened.*\?*$'
-        ]
-        
-        for pattern in title_indicators:
-            match = re.search(pattern, query_lower)
-            if match:
-                intent_data['is_title_query'] = True
-                if match.groups():
-                    intent_data['topic'] = match.group(1).strip()
-                    intent_data['exact_phrase'] = match.group(1).strip()
-                break
-
-        # Extract title-specific keywords (more comprehensive)
-        title_keywords = self._extract_title_keywords(query)
-        intent_data['title_keywords'] = title_keywords
-        
-        # Standard intent detection with title awareness
-        if re.search(r'\b(how many|count|number of|total)\b.*\barticles?\b', query_lower):
-            if re.search(r'\babout\b', query_lower):
-                intent_data['intent'] = 'count_topic'
-                topic_match = re.search(r'\babout\s+([^?]+)', query_lower)
-                if topic_match:
-                    intent_data['topic'] = topic_match.group(1).strip()
-                    intent_data['title_keywords'].extend(topic_match.group(1).strip().split())
-            else:
-                intent_data['intent'] = 'count_articles'
-        
-        elif re.search(r'\b(summary|summarize|tell me about|what.*about)\b', query_lower):
-            intent_data['intent'] = 'summary'
-            # Extract topic for summary
-            for pattern in [r'summary.*?of\s+([^?]+)', r'summarize\s+([^?]+)', r'tell me about\s+([^?]+)', r'what.*?about\s+([^?]+)']:
-                match = re.search(pattern, query_lower)
-                if match:
-                    intent_data['topic'] = match.group(1).strip()
-                    intent_data['is_title_query'] = True
-                    break
-        
-        elif re.search(r'\b(trending|latest|recent|today.*news|current.*news|top.*news|breaking)\b', query_lower):
-            intent_data['intent'] = 'trending'
-
-        # Enhanced source extraction
-        source_found = self._extract_source(query_lower)
-        if source_found:
-            intent_data['source'] = source_found
-
-        # Enhanced category extraction  
-        category_found = self._extract_category(query_lower)
-        if category_found:
-            intent_data['category'] = category_found
-
-        # Extract comprehensive search terms with title priority
-        search_terms = self._extract_search_terms(query_lower, intent_data)
-        intent_data['search_terms'] = search_terms
-
-        logger.info(f"Enhanced intent extraction: {intent_data}")
-        return intent_data
-
-    def _extract_title_keywords(self, query: str) -> List[str]:
-        """Extract keywords that are likely to appear in news titles"""
-        # Remove common query phrases first
-        cleaned_query = query.lower()
-        
-        # Remove question patterns
-        patterns_to_remove = [
-            r'tell me about\s+',
-            r'what is\s+',
-            r'what are\s+',
-            r'how is\s+',
-            r'news about\s+',
-            r'article about\s+',
-            r'latest\s+',
-            r'recent\s+',
-            r'today\s*\'*s*\s*',
-            r'trending\s+',
-            r'update on\s+',
-            r'headlines about\s+',
-            r'what is the matter\?*',
-            r'what.*happened.*\?*'
-        ]
-        
-        for pattern in patterns_to_remove:
-            cleaned_query = re.sub(pattern, '', cleaned_query)
-        
-        # Extract meaningful words
-        words = re.findall(r'\b[a-zA-Z]{3,}\b', cleaned_query)
-        
-        # Enhanced important keywords for Bangladesh news
-        important_keywords = {
-            'bangladesh', 'bangladeshi', 'dhaka', 'chittagong', 'sylhet', 'rajshahi', 'khulna', 'barishal',
-            'government', 'minister', 'parliament', 'election', 'awami', 'league', 'bnp',
-            'cricket', 'football', 'match', 'tournament', 'team', 'player', 'tigers',
-            'economy', 'business', 'market', 'trade', 'investment', 'taka', 'bank',
-            'covid', 'coronavirus', 'vaccine', 'hospital', 'health', 'medical',
-            'university', 'student', 'education', 'school', 'college', 'exam',
-            'police', 'officer', 'court', 'justice', 'law', 'crime', 'arrest', 'investigation',
-            'rohingya', 'refugee', 'myanmar', 'border', 'camp', 'west', 'bengal', 'india',
-            'garments', 'textile', 'export', 'import', 'factory', 'workers',
-            'flood', 'cyclone', 'weather', 'climate', 'disaster', 'relief'
-        }
-        
-        stop_words = {
-            'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'man', 'new', 'now', 'old', 'see', 'two', 'way', 'who', 'boy', 'did', 'its', 'let', 'put', 'say', 'she', 'too', 'use'
-        }
-        
-        title_keywords = []
-        for word in words:
-            word = word.lower()
-            if word in important_keywords or (len(word) > 3 and word not in stop_words):
-                title_keywords.append(word)
-        
-        return title_keywords[:8]  # Increased limit for better matching
-
-    def _extract_source(self, query_lower: str) -> Optional[str]:
-        """Enhanced source extraction"""
-        for source_key, source_variants in [
-            ('prothom_alo', ['prothom alo', 'prothomalo', 'prothom-alo']),
-            ('daily_star', ['daily star', 'thedailystar', 'daily-star']),
-            ('bdnews24', ['bdnews24', 'bdnews', 'bd news'])
-        ]:
-            for variant in source_variants:
-                if variant in query_lower:
-                    return source_key
-        return None
-
-    def _extract_category(self, query_lower: str) -> Optional[str]:
-        """Enhanced category extraction with better matching"""
-        for category, keywords in self.category_mapping.items():
-            for keyword in keywords:
-                if re.search(r'\b' + re.escape(keyword) + r'\b', query_lower):
-                    return category
-        return None
-
-    def _extract_search_terms(self, query: str, intent_data: Dict) -> List[str]:
-        """Extract search terms with priority on title-relevant words"""
-        # Start with title keywords if available
-        search_terms = intent_data.get('title_keywords', []).copy()
-        
-        # Add exact phrase if specified
-        if intent_data.get('exact_phrase'):
-            phrase_words = [word for word in intent_data['exact_phrase'].split() if len(word) > 2]
-            search_terms.extend(phrase_words)
-        
-        # Add topic if specified
-        if intent_data.get('topic'):
-            topic_words = [word for word in intent_data['topic'].split() if len(word) > 2]
-            search_terms.extend(topic_words)
-        
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_terms = []
-        for term in search_terms:
-            term_lower = term.lower()
-            if term_lower not in seen:
-                seen.add(term_lower)
-                unique_terms.append(term)
-        
-        return unique_terms[:10]  # Increased limit
-
-
-class EnhancedRAGPipeline:
-    """Enhanced RAG pipeline with clean, structured output"""
-
+class RAGPipeline:
+    """RAG pipeline"""
+    
     def __init__(self):
         self.db_manager = ChromaManager()
-        if USE_LOCAL:
-            self.llm = OllamaLLM()
-            logger.info("Using local Ollama LLM")
-        else:
-            self.llm = GroqLLM()
-            logger.info("Using Groq API")
-            
-        self.query_processor = TitleFocusedQueryProcessor()
-        self.prompt_builder = PromptBuilder()
-
-    def _title_first_search(self, query_data: Dict) -> List[Dict]:
-        """Search strategy that tries multiple approaches"""
-        results = []
+        self.retriever = RAGRetriever(self.db_manager)
+        self.reranker = ResultReranker()
+        self.optimizer = ContextOptimizer()
+        self.llm = OllamaLLM() if USE_LOCAL else GroqLLM()
         
-        try:
-            # Strategy 1: Exact title phrase search (highest priority)
-            if query_data.get('exact_phrase'):
-                exact_results = self.db_manager.search_by_exact_title_phrase(
-                    query_data['exact_phrase'], n_results=5
-                )
-                if exact_results:
-                    logger.info(f"Exact title phrase search found {len(exact_results)} results")
-                    results.extend(exact_results)
-            
-            # Strategy 2: Title keyword search
-            if query_data.get('title_keywords') or query_data.get('is_title_query'):
-                search_terms = query_data.get('title_keywords', [])
-                if query_data.get('topic'):
-                    search_terms.extend(query_data['topic'].split())
-                
-                if search_terms:
-                    title_query = ' '.join(search_terms[:5])  # Focus on key terms
-                    title_results = self.db_manager.search_by_title_keywords(title_query, n_results=8)
-                    
-                    if title_results:
-                        logger.info(f"Title keyword search found {len(title_results)} results")
-                        # Avoid duplicates
-                        existing_ids = {r.get('metadata', {}).get('chunk_id') for r in results}
-                        for result in title_results:
-                            chunk_id = result.get('metadata', {}).get('chunk_id')
-                            if chunk_id not in existing_ids:
-                                results.append(result)
-            
-            # Strategy 3: Title-emphasized semantic search
-            if query_data.get('title_keywords') or query_data.get('topic'):
-                search_query = query_data.get('topic') or ' '.join(query_data.get('title_keywords', []))
-                if search_query:
-                    title_semantic_results = self.db_manager.search_with_title_emphasis(
-                        search_query, n_results=10
-                    )
-                    
-                    # Filter out duplicates and add new results
-                    existing_chunk_ids = {r.get('metadata', {}).get('chunk_id') for r in results}
-                    for result in title_semantic_results:
-                        chunk_id = result.get('metadata', {}).get('chunk_id')
-                        if chunk_id not in existing_chunk_ids:
-                            results.append(result)
-            
-            # Strategy 4: Combined search with filters
-            if query_data.get('source') or query_data.get('category'):
-                search_query = query_data.get('topic') or ' '.join(query_data.get('search_terms', []))
-                if search_query:
-                    filtered_results = self.db_manager.combined_search(
-                        query=search_query,
-                        source=query_data.get('source'),
-                        category=query_data.get('category'),
-                        n_results=8
-                    )
-                    
-                    existing_chunk_ids = {r.get('metadata', {}).get('chunk_id') for r in results}
-                    for result in filtered_results:
-                        chunk_id = result.get('metadata', {}).get('chunk_id')
-                        if chunk_id not in existing_chunk_ids:
-                            results.append(result)
-            
-            # Strategy 5: Regular semantic search as fallback
-            if len(results) < 5:
-                original_query = query_data['original_query']
-                semantic_results = self.db_manager.search_similar(original_query, n_results=12)
-                
-                existing_chunk_ids = {r.get('metadata', {}).get('chunk_id') for r in results}
-                for result in semantic_results:
-                    chunk_id = result.get('metadata', {}).get('chunk_id')
-                    if chunk_id not in existing_chunk_ids:
-                        results.append(result)
-            
-            # Re-rank results with enhanced title bias
-            results = self._rerank_with_title_bias(results, query_data)
-            
-            logger.info(f"Title-first search found {len(results)} total results")
-            return results[:15]  # Return top 15 results
-            
-        except Exception as e:
-            logger.error(f"Error in title-first search: {e}")
-            # Ultimate fallback
-            return self.db_manager.search_similar(query_data['original_query'], n_results=10)
-
-    def _rerank_with_title_bias(self, results: List[Dict], query_data: Dict) -> List[Dict]:
-        """Re-rank results with strong bias toward title matches"""
-        title_keywords = set(word.lower() for word in query_data.get('title_keywords', []))
-        query_topic = query_data.get('topic', '').lower()
-        exact_phrase = query_data.get('exact_phrase', '').lower()
-        
-        for result in results:
-            metadata = result.get('metadata', {})
-            title = metadata.get('title', '').lower()
-            chunk_type = metadata.get('chunk_type', '')
-            is_title_chunk = metadata.get('is_title_chunk') == 'True'
-            
-            # Base similarity
-            base_similarity = result.get('similarity', 0)
-            
-            # Title match bonuses
-            title_bonus = 0
-            
-            # Bonus for exact phrase matches in title
-            if exact_phrase and exact_phrase in title:
-                title_bonus += 0.4
-            
-            # Bonus for title chunks
-            if is_title_chunk:
-                title_bonus += 0.2
-            
-            # Bonus for title keyword matches
-            if title_keywords:
-                title_words = set(title.split())
-                keyword_matches = len(title_keywords.intersection(title_words))
-                if keyword_matches > 0:
-                    title_bonus += (keyword_matches / len(title_keywords)) * 0.25
-            
-            # Bonus for topic in title
-            if query_topic and query_topic in title:
-                title_bonus += 0.3
-            
-            # Bonus for high title relevance score
-            title_relevance = float(metadata.get('title_relevance_score', 0))
-            if title_relevance > 0.7:
-                title_bonus += 0.15
-            elif title_relevance > 0.5:
-                title_bonus += 0.1
-            
-            # Bonus for chunk type
-            if 'title' in chunk_type:
-                title_bonus += 0.1
-            
-            # Apply bonus but cap at 0.99
-            result['similarity'] = min(0.99, base_similarity + title_bonus)
-            result['title_bonus'] = title_bonus
-        
-        # Sort by enhanced similarity
-        results.sort(key=lambda x: x.get('similarity', 0), reverse=True)
-        return results
-
-    def _format_context_for_llm(self, retrieved_docs: List[Dict]) -> str:
-        """Format context for LLM without exposing internal labels"""
-        if not retrieved_docs:
-            return "No relevant articles found."
-
-        context_parts = []
-        for i, doc in enumerate(retrieved_docs[:6], 1):  # Limit to top 6 results
-            metadata = doc.get('metadata', {})
-            text = doc.get('text', '')
-            
-            title = metadata.get('title', 'No title')
-            source = self._format_source_name(metadata.get('source', 'Unknown'))
-            category = metadata.get('category', 'Unknown')
-            
-            context_part = f"Article {i}:\n"
-            context_part += f"Title: {title}\n"
-            context_part += f"Source: {source}\n"
-            context_part += f"Category: {category}\n"
-            context_part += f"Content: {text[:1200]}...\n\n"
-            context_parts.append(context_part)
-
-        return "".join(context_parts)
-
-    def _format_source_name(self, source: str) -> str:
-        """Format source names for better display"""
-        source_mapping = {
-            'prothom_alo': 'Prothom Alo',
-            'daily_star': 'The Daily Star',
-            'bdnews24': 'BDNews24',
-            'bdnews': 'BDNews24'
-        }
-        return source_mapping.get(source, source.title().replace('_', ' '))
-
-    def _extract_source_urls(self, results: List[Dict]) -> List[str]:
-        """Extract unique source URLs from search results for citation"""
-        seen_urls = set()
-        source_urls = []
-        
-        for result in results:
-            metadata = result.get('metadata', {})
-            url = metadata.get('url', '').strip()
-            title = metadata.get('title', 'No title')
-            source = self._format_source_name(metadata.get('source', 'Unknown'))
-            
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                source_urls.append({
-                    'title': title,
-                    'source': source,
-                    'url': url
-                })
-        
-        return source_urls[:5]  # Limit to top 5 sources
-
-    def _format_sources_section(self, source_urls: List[Dict]) -> str:
-        """Format the sources section with links"""
-        if not source_urls:
-            return ""
-        
-        sources_text = "\n\n**Sources:**\n"
-        for i, source_info in enumerate(source_urls, 1):
-            sources_text += f"{i}. **{source_info['title']}** - {source_info['source']}\n"
-            sources_text += f"   Link: {source_info['url']}\n"
-        
-        return sources_text
-
-    def _handle_count_articles(self, query_data: Dict) -> str:
-        """Handle article count queries"""
-        try:
-            stats = self.db_manager.get_collection_stats()
-            total_chunks = stats.get('total_chunks', 0)
-            
-            if total_chunks == 0:
-                return ResponseMessages.NO_ARTICLES_LOADED
-            
-            unique_sources = stats.get('unique_sources', 0)
-            sources = stats.get('sources', [])
-            
-            if sources:
-                formatted_sources = [self._format_source_name(s) for s in sources]
-                return ResponseMessages.get_count_articles_response(
-                    total_chunks, unique_sources, formatted_sources
-                )
-            else:
-                return ResponseMessages.get_count_articles_response(total_chunks, unique_sources)
-            
-        except Exception as e:
-            logger.error(f"Error handling count articles: {e}")
-            return "I encountered an error while counting articles."
-
-    def _handle_count_topic(self, query_data: Dict) -> str:
-        """Handle topic-specific count queries"""
-        try:
-            results = self._title_first_search(query_data)
-            relevant_results = [r for r in results if r.get('similarity', 0) > 0.25]
-            
-            topic = query_data.get('topic', query_data.get('exact_phrase', 'the topic'))
-            
-            if not relevant_results:
-                return ResponseMessages.get_no_title_matches(topic)
-            
-            # Group by sources for better insight
-            sources = {}
-            for result in relevant_results:
-                source = result.get('metadata', {}).get('source', 'Unknown')
-                formatted_source = self._format_source_name(source)
-                sources[formatted_source] = sources.get(formatted_source, 0) + 1
-            
-            if sources:
-                sources_breakdown = '\n'.join(f"• {source}: {count} articles" for source, count in sources.items())
-                return ResponseMessages.get_count_topic_response(
-                    len(relevant_results), topic, sources_breakdown
-                )
-            else:
-                return ResponseMessages.get_count_topic_response(len(relevant_results), topic)
-                
-        except Exception as e:
-            logger.error(f"Error handling count topic: {e}")
-            return f"I encountered an error while counting articles about '{topic}'."
-
-    def _handle_summary(self, query_data: Dict) -> str:
-        """Handle summary requests"""
-        try:
-            results = self._title_first_search(query_data)
-
-            if not results:
-                topic = query_data.get('topic', query_data.get('exact_phrase', 'that topic'))
-                return ResponseMessages.get_no_title_matches(topic)
-
-            relevant_results = [r for r in results if r.get('similarity', 0) > 0.2]
-
-            if not relevant_results:
-                topic = query_data.get('topic', query_data.get('exact_phrase', 'that topic'))
-                return ResponseMessages.get_no_close_matches(topic)
-
-            context = self._format_context_for_llm(relevant_results)
-            topic = query_data.get('topic', query_data.get('exact_phrase', query_data['original_query']))
-            source_urls = self._extract_source_urls(relevant_results)
-            
-            # Use prompt builder for summary
-            prompt = (self.prompt_builder
-                     .with_topic(topic)
-                     .with_context(context)
-                     .build_summary_prompt())
-
-            llm_response = self.llm.generate(prompt, PromptTemplates.SYSTEM_PROMPT)
-            
-            # Add sources section
-            sources_section = self._format_sources_section(source_urls)
-            
-            return llm_response + sources_section
-
-        except Exception as e:
-            logger.error(f"Error handling summary: {e}")
-            return f"I couldn't generate a summary due to an error: {str(e)}"
-
-    def _handle_trending(self, query_data: Dict) -> str:
-        """Handle trending/latest news queries"""
-        try:
-            # For trending, we want a variety of recent articles
-            results = self._title_first_search(query_data)
-            
-            if not results:
-                # Fallback: get any recent articles
-                all_results = self.db_manager.collection.get(limit=15, include=['documents', 'metadatas'])
-                if all_results['documents']:
-                    results = []
-                    for i in range(len(all_results['documents'])):
-                        results.append({
-                            'text': all_results['documents'][i],
-                            'metadata': all_results['metadatas'][i],
-                            'similarity': 0.6
-                        })
-            
-            if not results:
-                return ResponseMessages.NO_TRENDING_NEWS
-
-            context = self._format_context_for_llm(results)
-            source_urls = self._extract_source_urls(results)
-            
-            # Use prompt template for trending
-            prompt = PromptTemplates.get_trending_prompt(context)
-
-            llm_response = self.llm.generate(prompt, PromptTemplates.SYSTEM_PROMPT)
-            
-            # Add sources section
-            sources_section = self._format_sources_section(source_urls)
-            
-            return llm_response + sources_section
-
-        except Exception as e:
-            logger.error(f"Error handling trending: {e}")
-            return "I encountered an error while fetching trending news."
-
-    def _handle_general_search(self, query_data: Dict) -> str:
-        """Handle general search queries"""
-        try:
-            results = self._title_first_search(query_data)
-            
-            if not results:
-                return ResponseMessages.get_no_relevant_articles(query_data['original_query'])
-            
-            # Filter by similarity threshold, but be more lenient for title matches
-            relevant_results = []
-            for result in results:
-                similarity = result.get('similarity', 0)
-                title_bonus = result.get('title_bonus', 0)
-                
-                if title_bonus > 0.1 or similarity > 0.15:
-                    relevant_results.append(result)
-            
-            if not relevant_results:
-                relevant_results = results[:5]  # Always show something
-            
-            context = self._format_context_for_llm(relevant_results)
-            source_urls = self._extract_source_urls(relevant_results)
-            
-            # Use prompt builder for general search
-            prompt = (self.prompt_builder
-                     .with_query(query_data['original_query'])
-                     .with_context(context)
-                     .build_general_prompt())
-
-            llm_response = self.llm.generate(prompt, PromptTemplates.SYSTEM_PROMPT)
-            
-            # Add sources section
-            sources_section = self._format_sources_section(source_urls)
-            
-            return llm_response + sources_section
-            
-        except Exception as e:
-            logger.error(f"Error handling general search: {e}")
-            return f"I encountered an error while searching for information about '{query_data['original_query']}'."
-
+        logger.info("RAG pipeline initialized")
+    
     def process_query(self, user_query: str) -> str:
-        """Main method to process user queries with clean output"""
+        """Query processing with better intent detection"""
         try:
             # Check if database has articles
             stats = self.db_manager.get_collection_stats()
             if stats.get('total_chunks', 0) == 0:
                 return ResponseMessages.NO_ARTICLES_LOADED
 
-            # Extract intent and entities from query
-            query_data = self.query_processor.extract_intent_and_entities(user_query)
-            intent = query_data['intent']
-
-            # Reset prompt builder for this query
-            self.prompt_builder.reset()
-
-            # Route to appropriate handler
-            if intent == 'count_articles':
-                return self._handle_count_articles(query_data)
-            elif intent == 'count_topic':
-                return self._handle_count_topic(query_data)
-            elif intent == 'summary':
-                return self._handle_summary(query_data)
-            elif intent == 'trending':
-                return self._handle_trending(query_data)
-            else:
-                return self._handle_general_search(query_data)
+            # Detect query intent
+            query_lower = user_query.lower()
+            
+            # Handle count queries for articles
+            if any(phrase in query_lower for phrase in ["how many articles", "how many news", "count of articles"]):
+                return self._handle_count_query(user_query, stats)
+            
+            # Handle yesterday's news specifically
+            if "yesterday" in query_lower and any(word in query_lower for word in ["news", "articles", "published"]):
+                return self._handle_date_query("yesterday")
+            
+            # Handle topic-specific counts
+            if "how many" in query_lower and "about" in query_lower:
+                topic = self._extract_topic(user_query)
+                if topic:
+                    return self._handle_topic_count(topic)
+            
+            # Handle summary requests
+            if any(word in query_lower for word in ["summary", "summarize"]) and any(word in query_lower for word in ["article", "news", "topic"]):
+                topic = self._extract_topic(user_query)
+                if topic:
+                    return self._generate_summary(topic)
+            
+            # Handle trending news
+            if any(phrase in query_lower for phrase in ["trending news", "trending today", "what is trending"]):
+                return self._handle_trending_news()
+            
+            # Default: semantic search
+            return self._handle_general_query(user_query)
 
         except Exception as e:
             logger.error(f"Error processing query '{user_query}': {e}")
             return ResponseMessages.DATABASE_ERROR
 
+    def _handle_count_query(self, query: str, stats: Dict) -> str:
+        """Handle queries asking for article counts"""
+        total_chunks = stats.get('total_chunks', 0)
+        unique_sources = stats.get('unique_sources', 0)
+        sources = stats.get('sources', [])
+        
+        response = f"📊 **Database Statistics**\n\n"
+        response += f"I currently have **{total_chunks}** article chunks from **{unique_sources}** news sources.\n\n"
+        
+        if sources:
+            response += "**Sources include:**\n"
+            for source in sources:
+                response += f"• {source}\n"
+        
+        return response
 
-# Create aliases for backward compatibility
-RAGPipeline = EnhancedRAGPipeline
-TitleFocusedQueryProcessor = TitleFocusedQueryProcessor
-ImprovedQueryProcessor = TitleFocusedQueryProcessor
-ImprovedRAGPipeline = EnhancedRAGPipeline
+    def _handle_date_query(self, date_ref: str) -> str:
+        """Handle date-specific article queries"""
+        from datetime import datetime, timedelta
+        
+        if date_ref == "yesterday":
+            target_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            target_date = date_ref
+        
+        # Search for articles from that date
+        results = self.db_manager.search_by_metadata({"published_date": {"$contains": target_date}}, n_results=100)
+        
+        count = len(results)
+        if count == 0:
+            return f"No articles found from {date_ref}. Note: The articles in the database may not include yesterday's news if they haven't been scraped recently."
+        
+        # Group by source
+        sources = {}
+        for result in results:
+            source = result['metadata'].get('source', 'Unknown')
+            sources[source] = sources.get(source, 0) + 1
+        
+        response = f"📅 **Articles from {date_ref}**\n\n"
+        response += f"Found **{count}** articles:\n\n"
+        for source, cnt in sources.items():
+            response += f"• {source}: {cnt} articles\n"
+        
+        return response
+
+    def _handle_topic_count(self, topic: str) -> str:
+        """Handle count queries for specific topics"""
+        results = self.db_manager.search_similar(topic, n_results=50)
+        
+        # Filter by relevance threshold
+        relevant_results = [r for r in results if r.get('similarity', 0) > 0.3]
+        count = len(relevant_results)
+        
+        if count == 0:
+            return f"No articles found about '{topic}'."
+        
+        # Group by source
+        sources = {}
+        for result in relevant_results:
+            source = result['metadata'].get('source', 'Unknown')
+            sources[source] = sources.get(source, 0) + 1
+        
+        response = f"📰 **Articles about '{topic}'**\n\n"
+        response += f"Found **{count}** relevant articles:\n\n"
+        for source, cnt in sorted(sources.items(), key=lambda x: x[1], reverse=True):
+            response += f"• {source}: {cnt} articles\n"
+        
+        # Add sample titles
+        response += "\n**Sample articles:**\n"
+        for i, result in enumerate(relevant_results[:3], 1):
+            title = result['metadata'].get('title', 'Untitled')
+            response += f"{i}. {title}\n"
+        
+        return response
+
+    def _generate_summary(self, topic: str) -> str:
+        """Generate summary for a specific topic"""
+        # Retrieve relevant articles
+        results = self.db_manager.search_similar(topic, n_results=10)
+        
+        if not results:
+            return f"No articles found about '{topic}' to summarize."
+        
+        # Filter highly relevant results
+        relevant_results = [r for r in results if r.get('similarity', 0) > 0.25]
+        
+        if not relevant_results:
+            return f"Found some articles but they don't seem closely related to '{topic}'."
+        
+        # Optimize context for summary
+        context = self.optimizer.optimize_context(relevant_results[:5])
+        
+        # Generate summary using LLM
+        prompt = PromptTemplates.get_summary_prompt(topic, context)
+        summary = self.llm.generate(prompt, PromptTemplates.SYSTEM_PROMPT)
+        
+        # Add article references
+        response = f"📝 **Summary: {topic}**\n\n{summary}\n\n"
+        response += "**Based on articles:**\n"
+        for i, result in enumerate(relevant_results[:3], 1):
+            title = result['metadata'].get('title', 'Untitled')
+            source = result['metadata'].get('source', 'Unknown')
+            response += f"{i}. {title} - {source}\n"
+        
+        return response
+
+    def _handle_trending_news(self) -> str:
+        """Handle trending news queries"""
+        # Get recent articles (you might want to sort by date)
+        results = self.db_manager.search_similar("bangladesh news today trending", n_results=15)
+        
+        if not results:
+            return "No trending news articles available. Please scrape recent news first."
+        
+        # Group by category/topic
+        categories = {}
+        for result in results:
+            category = result['metadata'].get('category', 'General')
+            if category not in categories:
+                categories[category] = []
+            categories[category].append(result)
+        
+        # Generate response
+        context = self.optimizer.optimize_context(results[:10])
+        prompt = PromptTemplates.get_trending_prompt(context)
+        trending_summary = self.llm.generate(prompt, PromptTemplates.SYSTEM_PROMPT)
+        
+        response = f"📈 **Trending News Today**\n\n{trending_summary}\n\n"
+        
+        # Add category breakdown
+        response += "**News by Category:**\n"
+        for category, articles in list(categories.items())[:5]:
+            response += f"\n**{category}** ({len(articles)} articles)\n"
+            for article in articles[:2]:
+                title = article['metadata'].get('title', 'Untitled')
+                response += f"• {title}\n"
+        
+        return response
+
+    def _extract_topic(self, query: str) -> str:
+        """Extract topic from query"""
+        # Remove common query words
+        stop_phrases = ["how many", "articles", "news", "about", "tell me", "summary of", 
+                    "summarize", "what is the", "were published", "show me"]
+        
+        topic = query.lower()
+        for phrase in stop_phrases:
+            topic = topic.replace(phrase, "")
+        
+        # Clean up
+        topic = topic.strip().strip("?.,!").strip()
+        
+        # If topic is too short, return None
+        if len(topic) < 3:
+            return None
+        
+        return topic
+
+    def _handle_general_query(self, user_query: str) -> str:
+        """Handle general queries with standard RAG pipeline"""
+        # Your existing RAG pipeline code
+        print("📚 Retrieving relevant documents...")
+        candidates = self.retriever.retrieve_documents(user_query, top_k=20)
+        if not candidates:
+            return ResponseMessages.get_no_relevant_articles(user_query)
+
+        print("📊 Re-ranking results...")
+        ranked_docs = self.reranker.rerank_results(candidates, user_query)
+
+        print("🎯 Selecting top documents...")
+        top_docs = ranked_docs[:10]
+
+        print("📝 Optimizing context...")
+        context = self.optimizer.optimize_context(top_docs)
+
+        print("🤖 Generating response...")
+        prompt = PromptTemplates.get_general_search_prompt(user_query, context)
+        response = self.llm.generate(prompt, PromptTemplates.SYSTEM_PROMPT)
+        
+        sources_section = self._format_sources_section(top_docs)
+        
+        return response + sources_section
+
+    def _format_sources_section(self, documents: List[Dict]) -> str:
+        if not documents:
+            return ""
+        
+        sources_str = "\n\n**Sources:**\n"
+        for i, doc in enumerate(documents[:5], 1):
+            metadata = doc['metadata']
+            sources_str += f"{i}. **{metadata.get('title', 'Untitled')}** - {metadata.get('source', 'Unknown')}\n"
+            sources_str += f"   Date: {metadata.get('published_date', 'Unknown')}\n"
+            sources_str += f"   Link: {metadata.get('url', 'N/A')}\n"
+            sources_str += f"   Snippet: {doc['text'][:200]}...\n\n"
+        
+        return sources_str
 
 
 def main():
-    """Test the enhanced RAG pipeline with clean output"""
-    rag = EnhancedRAGPipeline()
-    test_queries = [
-        "How many articles do you have?",
-        "What is trending news today?",
-        "Summarize economy news from Daily Star",
-        "How many articles about coronavirus vaccine?",
-        "Latest news from Prothom Alo"
-    ]
+    print("🚀 Starting Simplified RAG Pipeline...")
+    
+    try:
+        pipeline = RAGPipeline()
+        test_queries = [
+            "What is trending news today?",
+            "Tell me about Bangladesh politics",
+            "Recent news from Daily Star about sports",
+            "Summary of coronavirus vaccine news",
+            "Bangladesh cricket team performance"
+        ]
 
-    for query in test_queries:
-        print(f"\nQuery: {query}")
-        print("=" * 60)
-        response = rag.process_query(query)
-        print(f"Response: {response}")
-        print("=" * 80)
+        for query in test_queries:
+            print(f"\n📝 Query: {query}")
+            print("=" * 60)
+            response = pipeline.process_query(query)
+            print(f"🤖 Response: {response}")
+            print("=" * 80)
+            
+    except Exception as e:
+        print(f"Error running pipeline: {e}")
 
 
 if __name__ == "__main__":

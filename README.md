@@ -30,11 +30,10 @@ A Retrieval-Augmented Generation (RAG) chatbot that scrapes news articles from m
 ## Key Features
 
 - **Multi-Source News Scraping**: Automatically scrapes from Prothom Alo, The Daily Star, and BDNews24
-- **Advanced RAG Pipeline**: Enhanced text processing with title emphasis and semantic chunking
+- **Advanced RAG Pipeline**: Text processing and semantic chunking
 - **Flexible LLM Integration**: Choose between local Ollama (Llama 3.2) or cloud-based Groq API
 - **Interactive Streamlit UI**: Beautiful web interface with real-time chat and analytics
 - **Vector Search Engine**: ChromaDB with sentence transformers for semantic similarity search
-- **Title-Focused Search**: Specialized algorithms for finding articles by headlines and topics
 - **Comprehensive Analytics**: Database statistics, source distribution, and content metrics
 - **Containerized Deployment**: Full Docker support with automated setup
 - **Multi-Strategy Querying**: Handles count queries, summaries, trending news, and general search
@@ -44,16 +43,16 @@ A Retrieval-Augmented Generation (RAG) chatbot that scrapes news articles from m
 ```
   ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
   │   News Sources  │ --> │   Web Scraper    │ --> │ Text Processor  │
-  │ • Prothom Alo   │     │ • RSS Feeds      │     │ • Title Chunks  │
-  │ • Daily Star    │     │ • Parallel Fetch │     │ • Deduplication │
-  │ • BDNews24      │     │ • Content Extract│     │ • Metadata      │
+  │ • Prothom Alo   │     │ • RSS Feeds      │     │ • Deduplication │
+  │ • Daily Star    │     │ • Parallel Fetch │     │ • Metadata      │
+  │ • BDNews24, etc.│     │ • Content Extract│     │                 │
   └─────────────────┘     └──────────────────┘     └─────────────────┘
                                                            |
 ┌────────────────────┐    ┌──────────────────┐             v
 │   User Query       │    │   RAG Pipeline   │     ┌─────────────────┐
 │ • Intent Detection │--> │ • Multi-Strategy │ <-- │ Vector Database │
-│ • Entity Extract   │    │ • Title Priority │     │ • ChromaDB      │
-│ • Keyword Focus    │    │ • Source Filter  │     │ • Embeddings    │
+│ • Entity Extract   │    │ • Source Filter  │     │ • ChromaDB      │
+│ • Keyword Focus    │    │                  │     │ • Embeddings    │
 └────────────────────┘    └──────────────────┘     └─────────────────┘
                                 |
                                 v
@@ -72,10 +71,10 @@ news-rag-chatbot/
 ├── src/
 │   ├── config.py              # Configuration settings
 │   ├── news_scraper.py        # Multi-threaded web scraping
-│   ├── text_preprocessor.py   # Enhanced text processing
+│   ├── text_preprocessor.py   # Text processing
 │   ├── chroma_manager.py      # Vector database operations
 │   ├── prompts.py             # Prompt templates
-│   └── rag_pipeline.py        # RAG logic with title focus
+│   └── rag_pipeline.py        # RAG Pipeline
 ├── app.py                     # Main Streamlit application
 ├── data/                      # Data storage directory
 ├── logs/                      # Application logs
@@ -290,8 +289,7 @@ Adjust search parameters:
 VECTORDB_CONFIG = {
     "embedding_model": "all-MiniLM-L6-v2",
     "similarity_threshold": 0.15,
-    "max_results": 15,
-    "title_similarity_threshold": 0.25
+    "max_results": 15
 }
 ```
 
@@ -319,7 +317,6 @@ VECTORDB_CONFIG = {
    ```python
    SEARCH_CONFIG = {
        "max_context_length": 3000,
-       "min_similarity_threshold": 0.2
    }
    ```
 
