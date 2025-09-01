@@ -207,8 +207,8 @@ class ChatbotUI:
             sample_queries = [
                 "What is the trending news today?",
                 "Tell me about Bangladesh politics",
-                "Summary of recent sports news",
-                "Latest news from Prothom Alo",
+                "Tell me about recent cricket news of Bangladesh",
+                "Tell me about the upcoming election of Bangladesh",
                 "How many articles are there?",
             ]
 

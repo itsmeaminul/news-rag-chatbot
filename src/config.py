@@ -74,7 +74,7 @@ NEWS_SOURCES = {
 
 # Scraping configuration
 SCRAPING_CONFIG = {
-    "max_articles_per_source": 100,
+    "max_articles_per_source": 50,
     "request_timeout": 10,
     "delay_between_requests": 1,
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -107,7 +107,7 @@ USE_LOCAL = False   # True = Ollama local, False = Groq API
 
 LLM_PROVIDER = {
     "groq_api_key": os.getenv("GROQ_API_KEY", ""),
-    "groq_model": "llama3-8b-8192"
+    "groq_model": "llama-3.1-8b-instant"        # "llama3-8b-8192"
 }
 
 LLM_CONFIG = {
